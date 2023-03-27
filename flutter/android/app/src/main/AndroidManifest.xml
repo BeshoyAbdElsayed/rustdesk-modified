@@ -15,10 +15,10 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <application
-        android:icon="@mipmap/ic_launcher"
-        android:label="RustDesk"
+        android:icon="@mipmap/ic_launcher_mod"
+        android:label="CYMTV Remote"
         android:requestLegacyExternalStorage="true"
-        android:roundIcon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_mod"
         android:supportsRtl="true">
 
         <receiver
@@ -37,7 +37,7 @@
             android:name=".InputService"
             android:enabled="true"
             android:exported="false"
-            android:label="RustDesk Input"
+            android:label="CYMTV Remote Input"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
