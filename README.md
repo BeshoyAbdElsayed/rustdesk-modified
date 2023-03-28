@@ -8,8 +8,8 @@
 
 # Steps
 
-1. Follow the steps at https://rustdesk.com/docs/en/dev/build/linux/ to setup the Linux environment.
-2. Follow the steps at https://rustdesk.com/docs/en/dev/build/android/ to setup the Android environment.
+1. Follow the steps at https://rustdesk.com/docs/en/dev/build/linux/ to setup the Linux environment or refer to steps below.
+2. Follow the steps at https://rustdesk.com/docs/en/dev/build/android/ to setup the Android environment or refer to steps below.
 3. Use [versacode autopatch](https://github.com/versacode/autopatch) to apply the source code changes automatically or upload the files in this archive if no changes to the referenced files were made after 27 March, 2023.
 4. Install RustDesk hbbr and hbbs by executing the following commands:
 
@@ -45,7 +45,8 @@ TCP: 21119
 UDP: 21116
 ```
 
-# Build Linux App
+## Build Linux App
+
 1. Install dependencies: 
 ```
 sudo apt install -y g++ gcc git curl wget nasm yasm libgtk-3-dev clang libxcb-randr0-dev libxdo-dev libxfixes-dev libxcb-shape0-dev libxcb-xfixes0-dev libasound2-dev libpulse-dev cmake
@@ -85,7 +86,8 @@ VCPKG_ROOT=$HOME/vcpkg cargo build --release
 mv target/release/rustdesk $HOME/CYMTV_Remote
 ```
 
-# Build Android APK
+## Build Android APK
+
 1. Install Flutter 
 ```
 #using snap
@@ -189,3 +191,22 @@ flutter build apk --release --target-platform android-arm64 --split-per-abi
 ```
 mv build/app/outputs/flutter-apk/app-arm64-v8a-release.apk $HOME/CYMTV_Remote-release.apk
 ``` 
+
+## Generate DEB file
+
+1. Ensure that the correct binary is located at `binaries/linux/deb/cymtv-remote/usr/bin/cymtv-remote` then execute the following:
+
+```
+chmod 775 `binaries/linux/deb/cymtv-remote/DEBIAN/postinst
+chmod 775 `binaries/linux/deb/cymtv-remote/DEBIAN/postrm
+chmod 775 `binaries/linux/deb/cymtv-remote/DEBIAN/preinst
+chmod 775 `binaries/linux/deb/cymtv-remote/DEBIAN/prerm
+chmod 775 `binaries/linux/deb/cymtv-remote/usr/bin/cymtv-remote
+```
+
+2. Modify the file at `binaries/linux/deb/cymtv-remote/DEBIAN/control` to include the correct size, version and other necessary information.
+
+3. Build the .deb file by running the following:
+```
+dpkg-deb --build `binaries/linux/deb/cymtv-remote`
+```
