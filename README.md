@@ -183,10 +183,6 @@ sudo wget -O so.tar.gz https://github.com/rustdesk/doc.rustdesk.com/releases/dow
 tar xzvf so.tar.gz
 popd
 ```
-- temporary use debug sign config
-```
-sed -i "s/signingConfigs.release/signingConfigs.debug/g" ./flutter/android/app/build.gradle
-```
 - build APK with Flutter
 ```
 pushd flutter
