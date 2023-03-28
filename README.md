@@ -46,11 +46,11 @@ UDP: 21116
 ```
 
 # Build Linux App
-1. install dependencies: 
+1. Install dependencies: 
 ```
 sudo apt install -y g++ gcc git curl wget nasm yasm libgtk-3-dev clang libxcb-randr0-dev libxdo-dev libxfixes-dev libxcb-shape0-dev libxcb-xfixes0-dev libasound2-dev libpulse-dev cmake
 ```
-2. install vcpkg
+2. Install vcpkg
 ```
 cd $HOME
 git clone https://github.com/microsoft/vcpkg
@@ -61,45 +61,43 @@ vcpkg/bootstrap-vcpkg.sh
 export VCPKG_ROOT=$HOME/vcpkg
 vcpkg/vcpkg install libvpx libyuv opus
 ```
-3. install Rust and Cargo
+3. Install Rust and Cargo
 ```
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source $HOME/.cargo/env
 ```
-4. install `sciter` library
+4. Install `sciter` library
 ```
 sudo mkdir /usr/lib/rustdesk
 wget https://raw.githubusercontent.com/c-smile/sciter-sdk/master/bin.lnx/x64/libsciter-gtk.so
 sudo mv libsciter-gtk.so /usr/lib/rustdesk
 ``` 
-5. to build Embedded UI / Enable Inline Builds: 
-    - you need to have python3 installed
+5. To build Embedded UI / Enable Inline Builds: 
 ```
 cd <source-code-directory>
 python3 res/inline-sciter.py 
 sed -i "s/default = \[\"use_dasp\"\]/default = \[\"use_dasp\",\"inline\"\]/g" Cargo.toml
 ```
-6. build binary file
+6. Build binary file
 ```
 VCPKG_ROOT=$HOME/vcpkg cargo build --release
-
 #move binary file to home 
 mv target/release/rustdesk $HOME/CYMTV_Remote
 ```
 
 # Build Android APK
-- install Flutter 
+1. Install Flutter 
 ```
 #using snap
 sudo snap install flutter --classic
 flutter sdk-path
 ```
-- install Rust and Cargo
+2. Install Rust and Cargo
 ```
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source $HOME/.cargo/env
 ```
-- install vcpkg
+3. Install vcpkg
 ```
 cd $HOME
 git clone https://github.com/microsoft/vcpkg
@@ -110,29 +108,29 @@ vcpkg/bootstrap-vcpkg.sh
 export VCPKG_ROOT=$HOME/vcpkg
 vcpkg/vcpkg install libvpx libyuv opus
 ```
-- install dependencies
+4. Install dependencies
 ```
 sudo apt update -y
 sudo apt-get -qq install -y g++ gcc git curl wget nasm yasm libgtk-3-dev clang cmake libclang-dev ninja-build llvm-dev libclang-10-dev llvm-10-dev pkg-config libxcb-randr0-dev libxdo-dev libxfixes-dev libxcb-shape0-dev libxcb-xfixes0-dev libasound2-dev libpulse-dev  libappindicator3-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libvdpau-dev libva-dev libclang-dev tree libc6-dev gcc-multilib g++-multilib openjdk-11-jdk-headless
 ```
-- Installing Flutter Rust Bridge dependencies
+5. Install Flutter Rust Bridge dependencies
 ```
 cd <source-code-directory>
 cargo install flutter_rust_bridge_codegen
 pushd flutter && flutter pub get && popd
 ```
-- Generating bridge files
+6. Generate bridge files
 ```
 #first make sure build is not inline
 sed -i "s/default = \[\"use_dasp\",\"inline\"\]/default = \[\"use_dasp\"\]/g" Cargo.toml
 
 ~/.cargo/bin/flutter_rust_bridge_codegen --rust-input ./src/flutter_ffi.rs --dart-output ./flutter/lib/generated_bridge.dart
 ```
-- Install active ffigen
+7. Install active ffigen
 ```
 dart pub global activate ffigen 5.0.1
 ```
-- download additional dependencies
+8. Download additional dependencies
 ```
 pushd /opt
 sudo wget https://github.com/rustdesk/doc.rustdesk.com/releases/download/console/dep.tar.gz
@@ -140,16 +138,15 @@ sudo wget https://github.com/rustdesk/doc.rustdesk.com/releases/download/console
 sudo tar xzf dep.tar.gz
 popd
 ```
-- build rustdesk lib
+9. Build rustdesk lib
 ```
 rustup target add aarch64-linux-android
 ```
-- install cargo-ndk 
+10. Install cargo-ndk 
 ```
 cargo install cargo-ndk
 ```
-- download Android NDK
-    - you need to download and install Android studio first from [here](https://developer.android.com/studio)
+11. Download Android NDK (download and install Android Studio first from https://developer.android.com/studio)
 ```
 sudo wget -O android-ndk-r23c-linux.zip https://dl.google.com/android/repository/android-ndk-r23c-linux.zip
 
@@ -165,17 +162,17 @@ export PATH=$PATH:$HOME/Android/Sdk/ndk/android-ndk-r23c/prebuilt/linux-x86_64/b
 
 popd
 ```
-- build rust for flutter library
+12. build rust for flutter library
 ```
 ./flutter/ndk_arm64.sh
 ```
-- Moving generated library into jniLibs directory
+13. Move  generated library into `jniLibs` directory:
 ```
 mkdir -p ./flutter/android/app/src/main/jniLibs/arm64-v8a
 
 cp ./target/aarch64-linux-android/release/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/librustdesk.so
 ```
-- download necessary so files
+14. Download necessary `so` files
 ```
 pushd flutter
 sudo wget -O so.tar.gz https://github.com/rustdesk/doc.rustdesk.com/releases/download/console/so.tar.gz
@@ -183,12 +180,12 @@ sudo wget -O so.tar.gz https://github.com/rustdesk/doc.rustdesk.com/releases/dow
 tar xzvf so.tar.gz
 popd
 ```
-- build APK with Flutter
+15. Build APK with Flutter
 ```
 pushd flutter
 flutter build apk --release --target-platform android-arm64 --split-per-abi
 ```
-- move and rename APK file to home directory
+16. Move and rename APK file to home directory
 ```
 mv build/app/outputs/flutter-apk/app-arm64-v8a-release.apk $HOME/CYMTV_Remote-release.apk
 ``` 
