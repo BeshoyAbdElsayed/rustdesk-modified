@@ -1,0 +1,8 @@
+Package: cymtv-remote
+Version: 1.2.0
+Architecture: amd64
+Installed-Size: 26449429
+Maintainer: open-trade <info@rustdesk.com>
+Depends: libgtk-3-0, libxcb-randr0, libxdo3, libxfixes3, libxcb-shape0, libxcb-xfixes0, libasound2, libsystemd0, pulseaudio, python3-pip, curl
+Description: A remote control software.
+ (none)

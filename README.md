@@ -194,19 +194,19 @@ mv build/app/outputs/flutter-apk/app-arm64-v8a-release.apk $HOME/CYMTV_Remote-re
 
 ## Generate DEB file
 
-1. Ensure that the correct binary is located at `binaries/linux/deb/cymtv-remote/usr/bin/cymtv-remote` then execute the following:
+1. Ensure that the correct binary is located at `binaries/linux/dpkg/cymtv-remote/usr/bin/cymtv-remote` then execute the following:
 
 ```
-chmod 775 `binaries/linux/deb/cymtv-remote/DEBIAN/postinst
-chmod 775 `binaries/linux/deb/cymtv-remote/DEBIAN/postrm
-chmod 775 `binaries/linux/deb/cymtv-remote/DEBIAN/preinst
-chmod 775 `binaries/linux/deb/cymtv-remote/DEBIAN/prerm
-chmod 775 `binaries/linux/deb/cymtv-remote/usr/bin/cymtv-remote
+chmod 775 `binaries/linux/dpkg/cymtv-remote/DEBIAN/postinst
+chmod 775 `binaries/linux/dpkg/cymtv-remote/DEBIAN/postrm
+chmod 775 `binaries/linux/dpkg/cymtv-remote/DEBIAN/preinst
+chmod 775 `binaries/linux/dpkg/cymtv-remote/DEBIAN/prerm
+chmod 775 `binaries/linux/dpkg/cymtv-remote/usr/bin/cymtv-remote
 ```
 
-2. Modify the file at `binaries/linux/deb/cymtv-remote/DEBIAN/control` to include the correct size, version and other necessary information.
+2. Modify the file at `binaries/linux/dpkg/cymtv-remote/DEBIAN/control` to include the correct size, version and other necessary information.
 
 3. Build the .deb file by running the following:
 ```
-dpkg-deb --build `binaries/linux/deb/cymtv-remote`
+dpkg-deb --build `binaries/linux/dpkg/cymtv-remote`
 ```

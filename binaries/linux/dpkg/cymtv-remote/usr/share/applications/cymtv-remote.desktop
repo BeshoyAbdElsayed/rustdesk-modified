@@ -1,0 +1,10 @@
+[Desktop Entry]
+Encoding=UTF-8
+Comment=A remote control software.
+Exec=cymtv-remote
+Icon=cymtv-remote
+Name=CYMTV Remote
+Terminal=false
+Type=Application
+MimeType=
+Version=1.2.0

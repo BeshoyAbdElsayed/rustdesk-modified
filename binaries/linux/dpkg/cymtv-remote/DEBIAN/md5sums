@@ -1,0 +1,9 @@
+11e19cec0400463fad13a483a642d8c7 usr/bin/cymtv-remote
+9862fdd2fb47d0da5a2aba69dcf2d45f usr/lib/cymtv-remote/libsciter-gtk.so
+b3585b9a5c81a64991b262bd5456a2c9 usr/lib/cymtv-remote/mac-tray.png
+6ce96d1b2d73cc4e8565382b5d2c6adf usr/share/applications/cymtv-remote.desktop
+61084e8c61b3b8fbcb813927ede7f1f2 usr/share/cymtv-remote/files/pynput_service.py
+4b9a7ff78a9aa7b7664606a48f11db2c usr/share/cymtv-remote/files/systemd/cymtv-remote.service
+2c46ac10a0912db6e5a284f6d5f62f90 usr/share/icons/hicolor/128x128/apps/cymtv-remote.png
+6e8aad3e37e5d80aee48200c8804b1c3 usr/share/icons/hicolor/256x256@2x/apps/cymtv-remote.png
+8e15afed131dfc0fbaac6acffff8a5a0 usr/share/icons/hicolor/32x32/apps/cymtv-remote.png
