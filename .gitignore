@@ -13,10 +13,14 @@ src/version.rs
 *tgz
 cert.pfx
 *.bak
+*png
+*svg
+*jpg
 sciter.dll
 **pdb
 src/bridge_generated.rs
 src/bridge_generated.io.rs
+*deb
 rustdesk
 *.cache
 # appimage
@@ -44,3 +48,5 @@ lib/generated_bridge.dart
 .vscode-server/
 .ssh
 .devcontainer/.*
+# build cache in examples
+examples/**/target/
