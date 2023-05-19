@@ -635,7 +635,7 @@ class _FileManagerViewState extends State<FileManagerView> {
                     MenuButton(
                       onPressed: () {
                         final name = TextEditingController();
-                        _ffi.dialogManager.show((setState, close) {
+                        _ffi.dialogManager.show((setState, close, context) {
                           submit() {
                             if (name.value.text.isNotEmpty) {
                               controller.createDir(PathUtil.join(
@@ -802,7 +802,7 @@ class _FileManagerViewState extends State<FileManagerView> {
         switchType: SwitchType.scheckbox,
         text: translate("Show Hidden Files"),
         getter: () async {
-          return controller.options.value.isWindows;
+          return controller.options.value.showHidden;
         },
         setter: (bool v) async {
           controller.toggleShowHidden();

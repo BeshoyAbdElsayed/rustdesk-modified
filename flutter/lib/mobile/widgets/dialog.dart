@@ -20,7 +20,7 @@ void setPermanentPasswordDialog(OverlayDialogManager dialogManager) async {
   final p1 = TextEditingController(text: pw);
   var validateLength = false;
   var validateSame = false;
-  dialogManager.show((setState, close) {
+  dialogManager.show((setState, close, context) {
     submit() async {
       close();
       dialogManager.showLoading(translate("Waiting"));
@@ -111,7 +111,7 @@ void setTemporaryPasswordLengthDialog(
   var index = lengths.indexOf(length);
   if (index < 0) index = 0;
   length = lengths[index];
-  dialogManager.show((setState, close) {
+  dialogManager.show((setState, close, context) {
     setLength(newValue) {
       final oldValue = length;
       if (oldValue == newValue) return;
@@ -128,12 +128,19 @@ void setTemporaryPasswordLengthDialog(
 
     return CustomAlertDialog(
       title: Text(translate("Set one-time password length")),
-      content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children:
-              lengths.map((e) => getRadio(e, e, length, setLength)).toList()),
-      actions: [],
-      contentPadding: 14,
+      content: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: lengths
+              .map(
+                (value) => Row(
+                  children: [
+                    Text(value),
+                    Radio(
+                        value: value, groupValue: length, onChanged: setLength),
+                  ],
+                ),
+              )
+              .toList()),
     );
   }, backDismiss: true, clickMaskDismiss: true);
 }
@@ -153,7 +160,7 @@ void showServerSettingsWithValue(
   String? relayServerMsg;
   String? apiServerMsg;
 
-  dialogManager.show((setState, close) {
+  dialogManager.show((setState, close, context) {
     Future<bool> validate() async {
       if (idCtrl.text != oldCfg.idServer) {
         final res = await validateAsync(idCtrl.text);

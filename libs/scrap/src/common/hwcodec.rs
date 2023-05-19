@@ -1,12 +1,13 @@
 use crate::{
     codec::{EncoderApi, EncoderCfg},
-    hw, ImageFormat, HW_STRIDE_ALIGN,
+    hw, ImageFormat, ImageRgb, HW_STRIDE_ALIGN,
 };
 use hbb_common::{
+    allow_err,
     anyhow::{anyhow, Context},
     bytes::Bytes,
     config::HwCodecConfig,
-    get_time, lazy_static, log,
+    log,
     message_proto::{EncodedVideoFrame, EncodedVideoFrames, Message, VideoFrame},
     ResultType,
 };
@@ -18,18 +19,13 @@ use hwcodec::{
     Quality::{self, *},
     RateControl::{self, *},
 };
-use std::sync::{Arc, Mutex};
-
-lazy_static::lazy_static! {
-    static ref HW_ENCODER_NAME: Arc<Mutex<Option<String>>> = Default::default();
-}
 
 const CFG_KEY_ENCODER: &str = "bestHwEncoders";
 const CFG_KEY_DECODER: &str = "bestHwDecoders";
 
 const DEFAULT_PIXFMT: AVPixelFormat = AVPixelFormat::AV_PIX_FMT_YUV420P;
 pub const DEFAULT_TIME_BASE: [i32; 2] = [1, 30];
-const DEFAULT_GOP: i32 = 60;
+const DEFAULT_GOP: i32 = i32::MAX;
 const DEFAULT_HW_QUALITY: Quality = Quality_Default;
 const DEFAULT_RC: RateControl = RC_DEFAULT;
 
@@ -48,7 +44,7 @@ impl EncoderApi for HwEncoder {
         match cfg {
             EncoderCfg::HW(config) => {
                 let ctx = EncodeContext {
-                    name: config.codec_name.clone(),
+                    name: config.name.clone(),
                     width: config.width as _,
                     height: config.height as _,
                     pixfmt: DEFAULT_PIXFMT,
@@ -59,12 +55,12 @@ impl EncoderApi for HwEncoder {
                     quality: DEFAULT_HW_QUALITY,
                     rc: DEFAULT_RC,
                 };
-                let format = match Encoder::format_from_name(config.codec_name.clone()) {
+                let format = match Encoder::format_from_name(config.name.clone()) {
                     Ok(format) => format,
                     Err(_) => {
                         return Err(anyhow!(format!(
                             "failed to get format from name:{}",
-                            config.codec_name
+                            config.name
                         )))
                     }
                 };
@@ -130,10 +126,6 @@ impl HwEncoder {
             h264: None,
             h265: None,
         })
-    }
-
-    pub fn current_name() -> Arc<Mutex<Option<String>>> {
-        HW_ENCODER_NAME.clone()
     }
 
     pub fn encode(&mut self, bgra: &[u8]) -> ResultType<Vec<EncodeFrame>> {
@@ -207,7 +199,7 @@ impl HwDecoder {
             }
         }
         if fail {
-            check_config_process(true);
+            check_config_process();
         }
         HwDecoders { h264, h265 }
     }
@@ -235,30 +227,29 @@ pub struct HwDecoderImage<'a> {
 }
 
 impl HwDecoderImage<'_> {
-    // take dst_stride into account when you convert
-    pub fn to_fmt(
-        &self,
-        (fmt, dst_stride): (ImageFormat, usize),
-        fmt_data: &mut Vec<u8>,
-        i420: &mut Vec<u8>,
-    ) -> ResultType<()> {
+    // rgb [in/out] fmt and stride must be set in ImageRgb
+    pub fn to_fmt(&self, rgb: &mut ImageRgb, i420: &mut Vec<u8>) -> ResultType<()> {
         let frame = self.frame;
+        rgb.w = frame.width as _;
+        rgb.h = frame.height as _;
+        // take dst_stride into account when you convert
+        let dst_stride = rgb.stride();
         match frame.pixfmt {
             AVPixelFormat::AV_PIX_FMT_NV12 => hw::hw_nv12_to(
-                fmt,
+                rgb.fmt(),
                 frame.width as _,
                 frame.height as _,
                 &frame.data[0],
                 &frame.data[1],
                 frame.linesize[0] as _,
                 frame.linesize[1] as _,
-                fmt_data,
+                &mut rgb.raw as _,
                 i420,
                 HW_STRIDE_ALIGN,
             ),
             AVPixelFormat::AV_PIX_FMT_YUV420P => {
                 hw::hw_i420_to(
-                    fmt,
+                    rgb.fmt(),
                     frame.width as _,
                     frame.height as _,
                     &frame.data[0],
@@ -267,7 +258,7 @@ impl HwDecoderImage<'_> {
                     frame.linesize[0] as _,
                     frame.linesize[1] as _,
                     frame.linesize[2] as _,
-                    fmt_data,
+                    &mut rgb.raw as _,
                 );
                 return Ok(());
             }
@@ -275,11 +266,17 @@ impl HwDecoderImage<'_> {
     }
 
     pub fn bgra(&self, bgra: &mut Vec<u8>, i420: &mut Vec<u8>) -> ResultType<()> {
-        self.to_fmt((ImageFormat::ARGB, 1), bgra, i420)
+        let mut rgb = ImageRgb::new(ImageFormat::ARGB, 1);
+        self.to_fmt(&mut rgb, i420)?;
+        *bgra = rgb.raw;
+        Ok(())
     }
 
     pub fn rgba(&self, rgba: &mut Vec<u8>, i420: &mut Vec<u8>) -> ResultType<()> {
-        self.to_fmt((ImageFormat::ABGR, 1), rgba, i420)
+        let mut rgb = ImageRgb::new(ImageFormat::ABGR, 1);
+        self.to_fmt(&mut rgb, i420)?;
+        *rgba = rgb.raw;
+        Ok(())
     }
 }
 
@@ -331,13 +328,11 @@ pub fn check_config() {
     log::error!("Failed to serialize codec info");
 }
 
-pub fn check_config_process(force_reset: bool) {
+pub fn check_config_process() {
     use hbb_common::sysinfo::{ProcessExt, System, SystemExt};
 
     std::thread::spawn(move || {
-        if force_reset {
-            HwCodecConfig::remove();
-        }
+        HwCodecConfig::remove();
         if let Ok(exe) = std::env::current_exe() {
             if let Some(file_name) = exe.file_name().to_owned() {
                 let s = System::new_all();
@@ -352,7 +347,21 @@ pub fn check_config_process(force_reset: bool) {
                     let second = 3;
                     std::thread::sleep(std::time::Duration::from_secs(second));
                     // kill: Different platforms have different results
-                    child.kill().ok();
+                    allow_err!(child.kill());
+                    std::thread::sleep(std::time::Duration::from_millis(30));
+                    match child.try_wait() {
+                        Ok(Some(status)) => log::info!("Check hwcodec config, exit with: {status}"),
+                        Ok(None) => {
+                            log::info!(
+                                "Check hwcodec config, status not ready yet, let's really wait"
+                            );
+                            let res = child.wait();
+                            log::info!("Check hwcodec config, wait result: {res:?}");
+                        }
+                        Err(e) => {
+                            log::error!("Check hwcodec config, error attempting to wait: {e}")
+                        }
+                    }
                     HwCodecConfig::refresh();
                 }
             }

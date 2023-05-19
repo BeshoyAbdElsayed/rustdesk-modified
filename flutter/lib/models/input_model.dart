@@ -59,10 +59,12 @@ class InputModel {
 
   get id => parent.target?.id ?? "";
 
+  bool get keyboardPerm => parent.target!.ffiModel.keyboard;
+
   InputModel(this.parent);
 
   KeyEventResult handleRawKeyEvent(FocusNode data, RawKeyEvent e) {
-    if (!stateGlobal.grabKeyboard) {
+    if (isDesktop && !stateGlobal.grabKeyboard) {
       return KeyEventResult.handled;
     }
 
@@ -115,44 +117,41 @@ class InputModel {
   }
 
   void mapKeyboardMode(RawKeyEvent e) {
-    int scanCode;
-    int keyCode;
+    int positionCode = -1;
+    int platformCode = -1;
     bool down;
 
     if (e.data is RawKeyEventDataMacOs) {
       RawKeyEventDataMacOs newData = e.data as RawKeyEventDataMacOs;
-      scanCode = newData.keyCode;
-      keyCode = newData.keyCode;
+      positionCode = newData.keyCode;
+      platformCode = newData.keyCode;
     } else if (e.data is RawKeyEventDataWindows) {
       RawKeyEventDataWindows newData = e.data as RawKeyEventDataWindows;
-      scanCode = newData.scanCode;
-      keyCode = newData.keyCode;
+      positionCode = newData.scanCode;
+      platformCode = newData.keyCode;
     } else if (e.data is RawKeyEventDataLinux) {
       RawKeyEventDataLinux newData = e.data as RawKeyEventDataLinux;
       // scanCode and keyCode of RawKeyEventDataLinux are incorrect.
       // 1. scanCode means keycode
       // 2. keyCode means keysym
-      scanCode = 0;
-      keyCode = newData.scanCode;
+      positionCode = newData.scanCode;
+      platformCode = newData.keyCode;
     } else if (e.data is RawKeyEventDataAndroid) {
       RawKeyEventDataAndroid newData = e.data as RawKeyEventDataAndroid;
-      scanCode = newData.scanCode + 8;
-      keyCode = newData.keyCode;
-    } else {
-      scanCode = -1;
-      keyCode = -1;
-    }
+      positionCode = newData.scanCode + 8;
+      platformCode = newData.keyCode;
+    } else {}
 
     if (e is RawKeyDownEvent) {
       down = true;
     } else {
       down = false;
     }
-    inputRawKey(e.character ?? '', keyCode, scanCode, down);
+    inputRawKey(e.character ?? '', platformCode, positionCode, down);
   }
 
   /// Send raw Key Event
-  void inputRawKey(String name, int keyCode, int scanCode, bool down) {
+  void inputRawKey(String name, int platformCode, int positionCode, bool down) {
     const capslock = 1;
     const numlock = 2;
     const scrolllock = 3;
@@ -172,8 +171,8 @@ class InputModel {
     bind.sessionHandleFlutterKeyEvent(
         id: id,
         name: name,
-        keycode: keyCode,
-        scancode: scanCode,
+        platformCode: platformCode,
+        positionCode: positionCode,
         lockModes: lockModes,
         downOrUp: down);
   }
@@ -203,7 +202,7 @@ class InputModel {
   /// [down] indicates the key's state(down or up).
   /// [press] indicates a click event(down and up).
   void inputKey(String name, {bool? down, bool? press}) {
-    if (!parent.target!.ffiModel.keyboard()) return;
+    if (!keyboardPerm) return;
     bind.sessionInputKey(
         id: id,
         name: name,
@@ -286,7 +285,7 @@ class InputModel {
 
   /// Send mouse press event.
   void sendMouse(String type, MouseButtons button) {
-    if (!parent.target!.ffiModel.keyboard()) return;
+    if (!keyboardPerm) return;
     bind.sessionSendMouse(
         id: id,
         msg: json.encode(modify({'type': type, 'buttons': button.value})));
@@ -303,7 +302,7 @@ class InputModel {
 
   /// Send mouse movement event with distance in [x] and [y].
   void moveMouse(double x, double y) {
-    if (!parent.target!.ffiModel.keyboard()) return;
+    if (!keyboardPerm) return;
     var x2 = x.toInt();
     var y2 = y.toInt();
     bind.sessionSendMouse(
@@ -379,7 +378,7 @@ class InputModel {
   }
 
   void _scheduleFling2(double x, double y, int delay) {
-    if ((x ==0 && y == 0) || _stopFling) {
+    if ((x == 0 && y == 0) || _stopFling) {
       return;
     }
 
@@ -394,7 +393,7 @@ class InputModel {
       final dx0 = x * _trackpadSpeed * 2;
       final dy0 = y * _trackpadSpeed * 2;
 
-      // Try set delta (x,y) and delay. 
+      // Try set delta (x,y) and delay.
       var dx = dx0.toInt();
       var dy = dy0.toInt();
       var delay = _flingBaseDelay;
@@ -432,7 +431,8 @@ class InputModel {
   void onPointerPanZoomEnd(PointerPanZoomEndEvent e) {
     _stopFling = false;
     _trackpadScrollUnsent = Offset.zero;
-    _scheduleFling2(_trackpadLastDelta.dx, _trackpadLastDelta.dy, _flingBaseDelay);
+    _scheduleFling2(
+        _trackpadLastDelta.dx, _trackpadLastDelta.dy, _flingBaseDelay);
     _trackpadLastDelta = Offset.zero;
   }
 

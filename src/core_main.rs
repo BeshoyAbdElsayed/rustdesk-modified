@@ -1,13 +1,17 @@
+#[cfg(not(debug_assertions))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::platform::breakdown_callback;
-use hbb_common::log;
+#[cfg(not(debug_assertions))]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use hbb_common::platform::register_breakdown_handler;
+use hbb_common::{allow_err, log};
 
 /// shared by flutter and sciter main function
 ///
 /// [Note]
 /// If it returns [`None`], then the process will terminate, and flutter gui will not be started.
 /// If it returns [`Some`], then the process will continue, and flutter gui will be started.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn core_main() -> Option<Vec<String>> {
     let mut args = Vec::new();
     let mut flutter_args = Vec::new();
@@ -38,6 +42,7 @@ pub fn core_main() -> Option<Vec<String>> {
         }
         i += 1;
     }
+    #[cfg(not(debug_assertions))]
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     register_breakdown_handler(breakdown_callback);
     #[cfg(target_os = "linux")]
@@ -99,6 +104,9 @@ pub fn core_main() -> Option<Vec<String>> {
         crate::platform::elevate_or_run_as_system(click_setup, _is_elevate, _is_run_as_system);
         return None;
     }
+    #[cfg(all(feature = "flutter", feature = "plugin_framework"))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    init_plugins(&args);
     if args.is_empty() {
         std::thread::spawn(move || crate::start_server(false));
     } else {
@@ -139,10 +147,6 @@ pub fn core_main() -> Option<Vec<String>> {
                     true,
                     args.len() > 1,
                 ));
-                return None;
-            } else if args[0] == "--extract" {
-                #[cfg(feature = "with_rc")]
-                hbb_common::allow_err!(crate::rc::extract_resources(&args[1]));
                 return None;
             } else if args[0] == "--install-cert" {
                 #[cfg(windows)]
@@ -223,6 +227,27 @@ pub fn core_main() -> Option<Vec<String>> {
             // call connection manager to establish connections
             // meanwhile, return true to call flutter window to show control panel
             crate::ui_interface::start_option_status_sync();
+        } else if args[0] == "--cm-no-ui" {
+            #[cfg(feature = "flutter")]
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            crate::flutter::connection_manager::start_cm_no_ui();
+            return None;
+        } else {
+            #[cfg(all(feature = "flutter", feature = "plugin_framework"))]
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            if args[0] == "--plugin-install" {
+                if args.len() == 2 {
+                    crate::plugin::change_uninstall_plugin(&args[1], false);
+                } else if args.len() == 3 {
+                    crate::plugin::install_plugin_with_url(&args[1], &args[2]);
+                }
+                return None;
+            } else if args[0] == "--plugin-uninstall" {
+                if args.len() == 2 {
+                    crate::plugin::change_uninstall_plugin(&args[1], true);
+                }
+                return None;
+            }
         }
     }
     //_async_logger_holder.map(|x| x.flush());
@@ -230,6 +255,23 @@ pub fn core_main() -> Option<Vec<String>> {
     return Some(flutter_args);
     #[cfg(not(feature = "flutter"))]
     return Some(args);
+}
+
+#[inline]
+#[cfg(all(feature = "flutter", feature = "plugin_framework"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn init_plugins(args: &Vec<String>) {
+    if args.is_empty() || "--server" == (&args[0] as &str) {
+        #[cfg(debug_assertions)]
+        let load_plugins = true;
+        #[cfg(not(debug_assertions))]
+        let load_plugins = crate::platform::is_installed();
+        if load_plugins {
+            crate::plugin::init();
+        }
+    } else if "--service" == (&args[0] as &str) {
+        allow_err!(crate::plugin::remove_uninstalled());
+    }
 }
 
 fn import_config(path: &str) {

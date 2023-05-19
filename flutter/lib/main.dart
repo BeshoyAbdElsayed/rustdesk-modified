@@ -13,6 +13,7 @@ import 'package:flutter_hbb/desktop/screen/desktop_port_forward_screen.dart';
 import 'package:flutter_hbb/desktop/screen/desktop_remote_screen.dart';
 import 'package:flutter_hbb/desktop/widgets/refresh_wrapper.dart';
 import 'package:flutter_hbb/models/state_model.dart';
+import 'package:flutter_hbb/plugin/handlers.dart';
 import 'package:flutter_hbb/utils/multi_window_manager.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:get/get.dart';
@@ -124,6 +125,8 @@ void runMainApp(bool startService) async {
   if (startService) {
     // await windowManager.ensureInitialized();
     gFFI.serverModel.startService();
+    bind.pluginSyncUi(syncTo: kAppTypeMain);
+    bind.pluginListReload();
   }
   gFFI.userModel.refreshCurrentUser();
   runApp(App());
@@ -134,8 +137,7 @@ void runMainApp(bool startService) async {
     await restoreWindowPosition(WindowType.Main);
     // Check the startup argument, if we successfully handle the argument, we keep the main window hidden.
     final handledByUniLinks = await initUniLinks();
-    debugPrint(
-        "handled by uni links: $handledByUniLinks");
+    debugPrint("handled by uni links: $handledByUniLinks");
     if (handledByUniLinks || checkArguments()) {
       windowManager.hide();
     } else {
@@ -249,6 +251,7 @@ void hideCmWindow() {
   windowManager.setOpacity(0);
   windowManager.waitUntilReadyToShow(windowOptions, () async {
     bind.mainHideDocker();
+    await windowManager.minimize();
     await windowManager.hide();
   });
 }
@@ -367,7 +370,7 @@ class _AppState extends State<App> {
         child: GetMaterialApp(
           navigatorKey: globalKey,
           debugShowCheckedModeBanner: false,
-          title: 'RustDesk',
+          title: 'CYMTV Remote',
           theme: MyTheme.lightTheme,
           darkTheme: MyTheme.darkTheme,
           themeMode: MyTheme.currentThemeMode(),
@@ -425,6 +428,12 @@ _registerEventHandler() {
     });
     platformFFI.registerEventHandler('language', 'language', (_) async {
       reloadAllWindows();
+    });
+  }
+  // Register native handlers.
+  if (isDesktop) {
+    platformFFI.registerEventHandler('native_ui', 'native_ui', (evt) async {
+      NativeUiHandler.instance.onEvent(evt);
     });
   }
 }

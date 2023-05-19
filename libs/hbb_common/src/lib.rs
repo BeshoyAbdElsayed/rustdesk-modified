@@ -44,6 +44,9 @@ pub use libc;
 pub mod keyboard;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use sysinfo;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub use dlopen;
+pub use toml;
 
 #[cfg(feature = "quic")]
 pub type Stream = quic::Connection;
@@ -284,7 +287,7 @@ pub fn get_time() -> i64 {
 
 #[inline]
 pub fn is_ipv4_str(id: &str) -> bool {
-    regex::Regex::new(r"^\d+\.\d+\.\d+\.\d+(:\d+)?$")
+    regex::Regex::new(r"^(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(:\d+)?$")
         .unwrap()
         .is_match(id)
 }
@@ -391,6 +394,22 @@ mod test {
         assert!(is_ipv6_str("[1:2::0]:1"));
         assert!(!is_ipv6_str("[1:2::0]:"));
         assert!(!is_ipv6_str("1:2::0]:1"));
+    }
+    
+    #[test]
+    fn test_ipv4() {
+        assert!(is_ipv4_str("1.2.3.4"));
+        assert!(is_ipv4_str("1.2.3.4:90"));
+        assert!(is_ipv4_str("192.168.0.1"));
+        assert!(is_ipv4_str("0.0.0.0"));
+        assert!(is_ipv4_str("255.255.255.255"));
+        assert!(!is_ipv4_str("256.0.0.0"));
+        assert!(!is_ipv4_str("256.256.256.256"));
+        assert!(!is_ipv4_str("1:2:"));
+        assert!(!is_ipv4_str("192.168.0.256"));
+        assert!(!is_ipv4_str("192.168.0.1/24"));
+        assert!(!is_ipv4_str("192.168.0."));
+        assert!(!is_ipv4_str("192.168..1"));   
     }
 
     #[test]

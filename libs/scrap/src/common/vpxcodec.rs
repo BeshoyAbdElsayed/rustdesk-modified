@@ -7,7 +7,7 @@ use hbb_common::message_proto::{EncodedVideoFrame, EncodedVideoFrames, Message, 
 use hbb_common::ResultType;
 
 use crate::STRIDE_ALIGN;
-use crate::{codec::EncoderApi, ImageFormat};
+use crate::{codec::EncoderApi, ImageFormat, ImageRgb};
 
 use super::vpx::{vp8e_enc_control_id::*, vpx_codec_err_t::*, *};
 use hbb_common::bytes::Bytes;
@@ -30,6 +30,7 @@ pub struct VpxEncoder {
     ctx: vpx_codec_ctx_t,
     width: usize,
     height: usize,
+    id: VpxVideoCodecId,
 }
 
 pub struct VpxDecoder {
@@ -97,15 +98,10 @@ impl EncoderApi for VpxEncoder {
     {
         match cfg {
             crate::codec::EncoderCfg::VPX(config) => {
-                let i;
-                if cfg!(feature = "VP8") {
-                    i = match config.codec {
-                        VpxVideoCodecId::VP8 => call_vpx_ptr!(vpx_codec_vp8_cx()),
-                        VpxVideoCodecId::VP9 => call_vpx_ptr!(vpx_codec_vp9_cx()),
-                    };
-                } else {
-                    i = call_vpx_ptr!(vpx_codec_vp9_cx());
-                }
+                let i = match config.codec {
+                    VpxVideoCodecId::VP8 => call_vpx_ptr!(vpx_codec_vp8_cx()),
+                    VpxVideoCodecId::VP9 => call_vpx_ptr!(vpx_codec_vp9_cx()),
+                };
                 let mut c = unsafe { std::mem::MaybeUninit::zeroed().assume_init() };
                 call_vpx!(vpx_codec_enc_config_default(i, &mut c, 0));
 
@@ -134,9 +130,11 @@ impl EncoderApi for VpxEncoder {
                 c.kf_mode = vpx_kf_mode::VPX_KF_DISABLED; // reduce bandwidth a lot
 
                 /*
-                VPX encoder支持two-pass encode，这是为了rate control的。
-                对于两遍编码，就是需要整个编码过程做两次，第一次会得到一些新的控制参数来进行第二遍的编码，
-                这样可以在相同的bitrate下得到最好的PSNR
+                The VPX encoder supports two-pass encoding for rate control purposes.
+                In two-pass encoding, the entire encoding process is performed twice.
+                The first pass generates new control parameters for the second pass.
+
+                This approach enables the best PSNR at the same bit rate.
                 */
 
                 let mut ctx = Default::default();
@@ -187,12 +185,17 @@ impl EncoderApi for VpxEncoder {
                         VP9E_SET_TILE_COLUMNS as _,
                         4 as c_int
                     ));
+                } else if config.codec == VpxVideoCodecId::VP8 {
+                    // https://github.com/webmproject/libvpx/blob/972149cafeb71d6f08df89e91a0130d6a38c4b15/vpx/vp8cx.h#L172
+                    // https://groups.google.com/a/webmproject.org/g/webm-discuss/c/DJhSrmfQ61M
+                    call_vpx!(vpx_codec_control_(&mut ctx, VP8E_SET_CPUUSED as _, 12,));
                 }
 
                 Ok(Self {
                     ctx,
                     width: config.width as _,
                     height: config.height as _,
+                    id: config.codec,
                 })
             }
             _ => Err(anyhow!("encoder type mismatch")),
@@ -213,7 +216,7 @@ impl EncoderApi for VpxEncoder {
 
         // to-do: flush periodically, e.g. 1 second
         if frames.len() > 0 {
-            Ok(VpxEncoder::create_msg(frames))
+            Ok(VpxEncoder::create_msg(self.id, frames))
         } else {
             Err(anyhow!("no valid frame"))
         }
@@ -280,13 +283,17 @@ impl VpxEncoder {
     }
 
     #[inline]
-    fn create_msg(vp9s: Vec<EncodedVideoFrame>) -> Message {
+    pub fn create_msg(codec_id: VpxVideoCodecId, frames: Vec<EncodedVideoFrame>) -> Message {
         let mut msg_out = Message::new();
         let mut vf = VideoFrame::new();
-        vf.set_vp9s(EncodedVideoFrames {
-            frames: vp9s.into(),
+        let vpxs = EncodedVideoFrames {
+            frames: frames.into(),
             ..Default::default()
-        });
+        };
+        match codec_id {
+            VpxVideoCodecId::VP8 => vf.set_vp8s(vpxs),
+            VpxVideoCodecId::VP9 => vf.set_vp9s(vpxs),
+        }
         msg_out.set_video_frame(vf);
         msg_out
     }
@@ -382,15 +389,10 @@ impl VpxDecoder {
     pub fn new(config: VpxDecoderConfig) -> Result<Self> {
         // This is sound because `vpx_codec_ctx` is a repr(C) struct without any field that can
         // cause UB if uninitialized.
-        let i;
-        if cfg!(feature = "VP8") {
-            i = match config.codec {
-                VpxVideoCodecId::VP8 => call_vpx_ptr!(vpx_codec_vp8_dx()),
-                VpxVideoCodecId::VP9 => call_vpx_ptr!(vpx_codec_vp9_dx()),
-            };
-        } else {
-            i = call_vpx_ptr!(vpx_codec_vp9_dx());
-        }
+        let i = match config.codec {
+            VpxVideoCodecId::VP8 => call_vpx_ptr!(vpx_codec_vp8_dx()),
+            VpxVideoCodecId::VP9 => call_vpx_ptr!(vpx_codec_vp9_dx()),
+        };
         let mut ctx = Default::default();
         let cfg = vpx_codec_dec_cfg_t {
             threads: if config.num_threads == 0 {
@@ -414,25 +416,6 @@ impl VpxDecoder {
             VPX_DECODER_ABI_VERSION as _,
         ));
         Ok(Self { ctx })
-    }
-
-    pub fn decode2rgb(&mut self, data: &[u8], fmt: ImageFormat) -> Result<Vec<u8>> {
-        let mut img = Image::new();
-        for frame in self.decode(data)? {
-            drop(img);
-            img = frame;
-        }
-        for frame in self.flush()? {
-            drop(img);
-            img = frame;
-        }
-        if img.is_null() {
-            Ok(Vec::new())
-        } else {
-            let mut out = Default::default();
-            img.to(fmt, 1, &mut out);
-            Ok(out)
-        }
     }
 
     /// Feed some compressed data to the encoder
@@ -538,20 +521,26 @@ impl Image {
         self.inner().stride[iplane]
     }
 
-    pub fn to(&self, fmt: ImageFormat, stride: usize, dst: &mut Vec<u8>) {
-        let h = self.height();
-        let w = self.width();
+    #[inline]
+    pub fn get_bytes_per_row(w: usize, fmt: ImageFormat, stride: usize) -> usize {
         let bytes_per_pixel = match fmt {
             ImageFormat::Raw => 3,
             ImageFormat::ARGB | ImageFormat::ABGR => 4,
         };
         // https://github.com/lemenkov/libyuv/blob/6900494d90ae095d44405cd4cc3f346971fa69c9/source/convert_argb.cc#L128
         // https://github.com/lemenkov/libyuv/blob/6900494d90ae095d44405cd4cc3f346971fa69c9/source/convert_argb.cc#L129
-        let bytes_per_row = (w * bytes_per_pixel + stride - 1) & !(stride - 1);
-        dst.resize(h * bytes_per_row, 0);
+        (w * bytes_per_pixel + stride - 1) & !(stride - 1)
+    }
+
+    // rgb [in/out] fmt and stride must be set in ImageRgb
+    pub fn to(&self, rgb: &mut ImageRgb) {
+        rgb.w = self.width();
+        rgb.h = self.height();
+        let bytes_per_row = Self::get_bytes_per_row(rgb.w, rgb.fmt, rgb.stride());
+        rgb.raw.resize(rgb.h * bytes_per_row, 0);
         let img = self.inner();
         unsafe {
-            match fmt {
+            match rgb.fmt() {
                 ImageFormat::Raw => {
                     super::I420ToRAW(
                         img.planes[0],
@@ -560,7 +549,7 @@ impl Image {
                         img.stride[1],
                         img.planes[2],
                         img.stride[2],
-                        dst.as_mut_ptr(),
+                        rgb.raw.as_mut_ptr(),
                         bytes_per_row as _,
                         self.width() as _,
                         self.height() as _,
@@ -574,7 +563,7 @@ impl Image {
                         img.stride[1],
                         img.planes[2],
                         img.stride[2],
-                        dst.as_mut_ptr(),
+                        rgb.raw.as_mut_ptr(),
                         bytes_per_row as _,
                         self.width() as _,
                         self.height() as _,
@@ -588,7 +577,7 @@ impl Image {
                         img.stride[1],
                         img.planes[2],
                         img.stride[2],
-                        dst.as_mut_ptr(),
+                        rgb.raw.as_mut_ptr(),
                         bytes_per_row as _,
                         self.width() as _,
                         self.height() as _,

@@ -49,7 +49,7 @@ impl<T: Subscriber + From<ConnInner>> ServiceInner<T> {
         for (_, s) in self.new_subscribes.drain() {
             self.subscribes.insert(s.id(), s);
         }
-        assert!(self.new_subscribes.is_empty());
+        debug_assert!(self.new_subscribes.is_empty());
     }
 
     #[inline]
@@ -221,6 +221,7 @@ impl<T: Subscriber + From<ConnInner>> ServiceTmpl<T> {
                     thread::sleep(interval - elapsed);
                 }
             }
+            log::info!("Service {} exit", sp.name());
         });
         self.0.write().unwrap().handle = Some(thread);
     }
@@ -256,6 +257,7 @@ impl<T: Subscriber + From<ConnInner>> ServiceTmpl<T> {
                 }
                 thread::sleep(time::Duration::from_millis(HIBERNATE_TIMEOUT));
             }
+            log::info!("Service {} exit", sp.name());
         });
         self.0.write().unwrap().handle = Some(thread);
     }
