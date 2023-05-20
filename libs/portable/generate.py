@@ -64,7 +64,7 @@ def build_portable(output_folder: str):
     os.system("cargo build --release")
 
 # Linux: python3 generate.py -f ../rustdesk-portable-packer/test -o . -e ./test/main.py
-# Windows: python3 .\generate.py -f ..\rustdesk\flutter\build\windows\runner\Debug\ -o . -e ..\rustdesk\flutter\build\windows\runner\Debug\rustdesk.exe
+# Windows: python3 .\generate.py -f ..\rustdesk\flutter\build\windows\runner\Debug\ -o . -e ..\rustdesk\flutter\build\windows\runner\Debug\cymtvremote.exe
 if __name__ == '__main__':
     parser = optparse.OptionParser()
     parser.add_option("-f", "--folder", dest="folder",

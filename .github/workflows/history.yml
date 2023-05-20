@@ -89,7 +89,7 @@ jobs:
         shell: bash
         run: |
           pushd ./libs/portable
-          python3 ./generate.py -f ../../flutter/build/windows/runner/Release/ -o . -e ../../flutter/build/windows/runner/Release/rustdesk.exe
+          python3 ./generate.py -f ../../flutter/build/windows/runner/Release/ -o . -e ../../flutter/build/windows/runner/Release/cymtvremote.exe
           popd
           mkdir -p ./SignOutput
           mv ./target/release/rustdesk-portable-packer.exe ./SignOutput/rustdesk-2022-12-05-${{ matrix.job.target }}.exe
@@ -178,7 +178,7 @@ jobs:
         shell: bash
         run: |
           pushd ./libs/portable
-          python3 ./generate.py -f ../../flutter/build/windows/runner/Release/ -o . -e ../../flutter/build/windows/runner/Release/rustdesk.exe
+          python3 ./generate.py -f ../../flutter/build/windows/runner/Release/ -o . -e ../../flutter/build/windows/runner/Release/cymtvremote.exe
           popd
           mkdir -p ./SignOutput
           mv ./target/release/rustdesk-portable-packer.exe ./SignOutput/rustdesk-2022-12-12-${{ matrix.job.target }}.exe
@@ -267,7 +267,7 @@ jobs:
         shell: bash
         run: |
           pushd ./libs/portable
-          python3 ./generate.py -f ../../flutter/build/windows/runner/Release/ -o . -e ../../flutter/build/windows/runner/Release/rustdesk.exe
+          python3 ./generate.py -f ../../flutter/build/windows/runner/Release/ -o . -e ../../flutter/build/windows/runner/Release/cymtvremote.exe
           popd
           mkdir -p ./SignOutput
           mv ./target/release/rustdesk-portable-packer.exe ./SignOutput/rustdesk-2022-12-19-${{ matrix.job.target }}.exe
@@ -356,7 +356,7 @@ jobs:
         shell: bash
         run: |
           pushd ./libs/portable
-          python3 ./generate.py -f ../../flutter/build/windows/runner/Release/ -o . -e ../../flutter/build/windows/runner/Release/rustdesk.exe
+          python3 ./generate.py -f ../../flutter/build/windows/runner/Release/ -o . -e ../../flutter/build/windows/runner/Release/cymtvremote.exe
           popd
           mkdir -p ./SignOutput
           mv ./target/release/rustdesk-portable-packer.exe ./SignOutput/rustdesk-2022-12-26-${{ matrix.job.target }}.exe

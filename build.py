@@ -13,7 +13,7 @@ import sys
 windows = platform.platform().startswith('Windows')
 osx = platform.platform().startswith(
     'Darwin') or platform.platform().startswith("macOS")
-hbb_name = 'rustdesk' + ('.exe' if windows else '')
+hbb_name = 'cymtvremote' + ('.exe' if windows else '')
 exe_path = 'target/release/' + hbb_name
 if windows:
     flutter_build_dir = 'build/windows/runner/Release/'
@@ -420,7 +420,7 @@ def build_flutter_windows(version, features):
     os.chdir('libs/portable')
     system2('pip3 install -r requirements.txt')
     system2(
-        f'python3 ./generate.py -f ../../{flutter_build_dir_2} -o . -e ../../{flutter_build_dir_2}/rustdesk.exe')
+        f'python3 ./generate.py -f ../../{flutter_build_dir_2} -o . -e ../../{flutter_build_dir_2}/cymtvremote.exe')
     os.chdir('../..')
     if os.path.exists('./rustdesk_portable.exe'):
         os.replace('./target/release/rustdesk-portable-packer.exe',
@@ -469,17 +469,17 @@ def main():
             build_flutter_windows(version, features)
             return
         system2('cargo build --release --features ' + features)
-        # system2('upx.exe target/release/rustdesk.exe')
-        system2('mv target/release/rustdesk.exe target/release/RustDesk.exe')
+        # system2('upx.exe target/release/cymtvremote.exe')
+        system2('mv target/release/cymtvremote.exe target/release/CYMTVRemote.exe')
         pa = os.environ.get('P')
         if pa:
             system2(
                 f'signtool sign /a /v /p {pa} /debug /f .\\cert.pfx /t http://timestamp.digicert.com  '
-                'target\\release\\rustdesk.exe')
+                'target\\release\\cymtvremote.exe')
         else:
             print('Not signed')
         system2(
-            f'cp -rf target/release/RustDesk.exe {res_dir}')
+            f'cp -rf target/release/CYMTVRemote.exe {res_dir}')
         os.chdir('libs/portable')
         system2('pip3 install -r requirements.txt')
         system2(
