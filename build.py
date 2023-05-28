@@ -13,7 +13,7 @@ import sys
 windows = platform.platform().startswith('Windows')
 osx = platform.platform().startswith(
     'Darwin') or platform.platform().startswith("macOS")
-hbb_name = 'cymtvremote' + ('.exe' if windows else '')
+hbb_name = 'cymtv remote' + ('.exe' if windows else '')
 exe_path = 'target/release/' + hbb_name
 if windows:
     flutter_build_dir = 'build/windows/runner/Release/'
@@ -390,8 +390,8 @@ def build_flutter_dmg(version, features):
     os.chdir('flutter')
     system2('flutter build macos --release')
     system2(
-        "create-dmg --volname \"RustDesk Installer\" --window-pos 200 120 --window-size 800 400 --icon-size 100 --app-drop-link 600 185 --icon RustDesk.app 200 190 --hide-extension RustDesk.app rustdesk.dmg ./build/macos/Build/Products/Release/RustDesk.app")
-    os.rename("rustdesk.dmg", f"../rustdesk-{version}.dmg")
+        "create-dmg --volname \"CYMTV Remote Installer\" --window-pos 200 120 --window-size 800 400 --icon-size 100 --app-drop-link 600 185 --icon CYMTV\ Remote.app 200 190 --hide-extension CYMTV\ Remote.app cymtvremote.dmg ./build/macos/Build/Products/Release/CYMTV\ Remote.app")
+    os.rename("cymtvremote.dmg", f"../rustdesk-{version}.dmg")
     os.chdir("..")
 
 
@@ -420,7 +420,7 @@ def build_flutter_windows(version, features):
     os.chdir('libs/portable')
     system2('pip3 install -r requirements.txt')
     system2(
-        f'python3 ./generate.py -f ../../{flutter_build_dir_2} -o . -e ../../{flutter_build_dir_2}/cymtvremote.exe')
+        f'python3 ./generate.py -f ../../{flutter_build_dir_2} -o . -e ../../{flutter_build_dir_2}/cymtv\ remote.exe')
     os.chdir('../..')
     if os.path.exists('./rustdesk_portable.exe'):
         os.replace('./target/release/rustdesk-portable-packer.exe',
@@ -469,17 +469,17 @@ def main():
             build_flutter_windows(version, features)
             return
         system2('cargo build --release --features ' + features)
-        # system2('upx.exe target/release/cymtvremote.exe')
-        system2('mv target/release/cymtvremote.exe target/release/CYMTVRemote.exe')
+        # system2('upx.exe target/release/cymtv\ remote.exe')
+        system2('mv target/release/rustdesk.exe target/release/CYMTV\ Remote.exe')
         pa = os.environ.get('P')
         if pa:
             system2(
                 f'signtool sign /a /v /p {pa} /debug /f .\\cert.pfx /t http://timestamp.digicert.com  '
-                'target\\release\\cymtvremote.exe')
+                'target\\release\\cymtv\ remote.exe')
         else:
             print('Not signed')
         system2(
-            f'cp -rf target/release/CYMTVRemote.exe {res_dir}')
+            f'cp -rf target/release/CYMTV\ Remote.exe {res_dir}')
         os.chdir('libs/portable')
         system2('pip3 install -r requirements.txt')
         system2(
@@ -532,12 +532,12 @@ def main():
             system2('cargo bundle --release --features ' + features)
             if osx:
                 system2(
-                    'strip target/release/bundle/osx/RustDesk.app/Contents/MacOS/rustdesk')
+                    'strip target/release/bundle/osx/CYMTVRemote.app/Contents/MacOS/rustdesk')
                 system2(
-                    'cp libsciter.dylib target/release/bundle/osx/RustDesk.app/Contents/MacOS/')
+                    'cp libsciter.dylib target/release/bundle/osx/CYMTVRemote.app/Contents/MacOS/')
                 # https://github.com/sindresorhus/create-dmg
                 system2('/bin/rm -rf *.dmg')
-                plist = "target/release/bundle/osx/RustDesk.app/Contents/Info.plist"
+                plist = "target/release/bundle/osx/CYMTVRemote.app/Contents/Info.plist"
                 txt = open(plist).read()
                 with open(plist, "wt") as fh:
                     fh.write(txt.replace("</dict>", """
@@ -549,14 +549,14 @@ def main():
                     system2('''
     # buggy: rcodesign sign ... path/*, have to sign one by one
     # install rcodesign via cargo install apple-codesign
-    #rcodesign sign --p12-file ~/.p12/rustdesk-developer-id.p12 --p12-password-file ~/.p12/.cert-pass --code-signature-flags runtime ./target/release/bundle/osx/RustDesk.app/Contents/MacOS/rustdesk
-    #rcodesign sign --p12-file ~/.p12/rustdesk-developer-id.p12 --p12-password-file ~/.p12/.cert-pass --code-signature-flags runtime ./target/release/bundle/osx/RustDesk.app/Contents/MacOS/libsciter.dylib
-    #rcodesign sign --p12-file ~/.p12/rustdesk-developer-id.p12 --p12-password-file ~/.p12/.cert-pass --code-signature-flags runtime ./target/release/bundle/osx/RustDesk.app
+    #rcodesign sign --p12-file ~/.p12/rustdesk-developer-id.p12 --p12-password-file ~/.p12/.cert-pass --code-signature-flags runtime ./target/release/bundle/osx/CYMTVRemote.app/Contents/MacOS/rustdesk
+    #rcodesign sign --p12-file ~/.p12/rustdesk-developer-id.p12 --p12-password-file ~/.p12/.cert-pass --code-signature-flags runtime ./target/release/bundle/osx/CYMTVRemote.app/Contents/MacOS/libsciter.dylib
+    #rcodesign sign --p12-file ~/.p12/rustdesk-developer-id.p12 --p12-password-file ~/.p12/.cert-pass --code-signature-flags runtime ./target/release/bundle/osx/CYMTVRemote.app
     # goto "Keychain Access" -> "My Certificates" for below id which starts with "Developer ID Application:"
-    codesign -s "Developer ID Application: {0}" --force --options runtime  ./target/release/bundle/osx/RustDesk.app/Contents/MacOS/*
-    codesign -s "Developer ID Application: {0}" --force --options runtime  ./target/release/bundle/osx/RustDesk.app
+    codesign -s "Developer ID Application: {0}" --force --options runtime  ./target/release/bundle/osx/CYMTVRemote.app/Contents/MacOS/*
+    codesign -s "Developer ID Application: {0}" --force --options runtime  ./target/release/bundle/osx/CYMTVRemote.app
     '''.format(pa))
-                system2('create-dmg target/release/bundle/osx/RustDesk.app')
+                system2('create-dmg target/release/bundle/osx/CYMTVRemote.app')
                 os.rename('RustDesk %s.dmg' %
                           version, 'rustdesk-%s.dmg' % version)
                 if pa:
@@ -571,7 +571,7 @@ def main():
     # https://gregoryszorc.com/docs/apple-codesign/0.16.0/apple_codesign_rcodesign.html#notarizing-and-stapling
     # p8 file is generated when you generate api key, download and put it under ~/.private_keys/
     rcodesign notarize --api-issuer {2} --api-key {3} --staple ./rustdesk-{1}.dmg
-    # verify:  spctl -a -t exec -v /Applications/RustDesk.app
+    # verify:  spctl -a -t exec -v /Applications/CYMTVRemote.app
     '''.format(pa, version, os.environ.get('api-issuer'), os.environ.get('api-key')))
                 else:
                     print('Not signed')
