@@ -88,10 +88,7 @@ impl<T: InvokeUiSession> Session<T> {
     }
 
     pub fn is_port_forward(&self) -> bool {
-        let conn_type = self.lc
-            .read()
-            .unwrap()
-            .conn_type;
+        let conn_type = self.lc.read().unwrap().conn_type;
         conn_type == ConnType::PORT_FORWARD || conn_type == ConnType::RDP
     }
 
@@ -228,16 +225,18 @@ impl<T: InvokeUiSession> Session<T> {
         true
     }
 
-    pub fn alternative_codecs(&self) -> (bool, bool, bool) {
+    pub fn alternative_codecs(&self) -> (bool, bool, bool, bool) {
         let decoder = scrap::codec::Decoder::supported_decodings(None);
         let mut vp8 = decoder.ability_vp8 > 0;
+        let mut av1 = decoder.ability_av1 > 0;
         let mut h264 = decoder.ability_h264 > 0;
         let mut h265 = decoder.ability_h265 > 0;
         let enc = &self.lc.read().unwrap().supported_encoding;
         vp8 = vp8 && enc.vp8;
+        av1 = av1 && enc.av1;
         h264 = h264 && enc.h264;
         h265 = h265 && enc.h265;
-        (vp8, h264, h265)
+        (vp8, av1, h264, h265)
     }
 
     pub fn change_prefer_codec(&self) {
@@ -830,6 +829,11 @@ impl<T: InvokeUiSession> Session<T> {
                 log::info!("server not started (will try to start): {}", err);
             }
         }
+    }
+
+    #[inline]
+    pub fn set_custom_resolution(&mut self, wh: Option<(i32, i32)>) {
+        self.lc.write().unwrap().set_custom_resolution(wh);
     }
 
     pub fn change_resolution(&self, width: i32, height: i32) {

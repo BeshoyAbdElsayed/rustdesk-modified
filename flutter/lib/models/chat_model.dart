@@ -7,6 +7,7 @@ import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:get/get_rx/src/rx_types/rx_types.dart';
 import 'package:get/get.dart';
 import 'package:window_manager/window_manager.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 import '../consts.dart';
 import '../common.dart';
@@ -104,21 +105,23 @@ class ChatModel with ChangeNotifier {
 
     final overlay = OverlayEntry(builder: (context) {
       return DraggableFloatWidget(
-          config: DraggableFloatWidgetBaseConfig(
-            initPositionYInTop: false,
-            initPositionYMarginBorder: 100,
-            borderTopContainTopBar: true,
-          ),
-          child: FloatingActionButton(
-              onPressed: () {
-                if (chatWindowOverlayEntry == null) {
-                  showChatWindowOverlay();
-                } else {
-                  hideChatWindowOverlay();
-                }
-              },
-              backgroundColor: Theme.of(context).colorScheme.primary,
-              child: Icon(Icons.message)));
+        config: DraggableFloatWidgetBaseConfig(
+          initPositionYInTop: false,
+          initPositionYMarginBorder: 100,
+          borderTopContainTopBar: true,
+        ),
+        child: FloatingActionButton(
+          onPressed: () {
+            if (chatWindowOverlayEntry == null) {
+              showChatWindowOverlay();
+            } else {
+              hideChatWindowOverlay();
+            }
+          },
+          backgroundColor: Theme.of(context).colorScheme.primary,
+          child: SvgPicture.asset('assets/chat2.svg'),
+        ),
+      );
     });
     overlayState.insert(overlay);
     chatIconOverlayEntry = overlay;
@@ -182,6 +185,13 @@ class ChatModel with ChangeNotifier {
     }
   }
 
+  hideChatOverlay() {
+    if (!_isChatOverlayHide()) {
+      hideChatIconOverlay();
+      hideChatWindowOverlay();
+    }
+  }
+
   showChatPage(int id) async {
     if (isConnManager) {
       if (!_isShowCMChatPage) {
@@ -203,11 +213,12 @@ class ChatModel with ChangeNotifier {
       notifyListeners();
       await windowManager.show();
       await windowManager.setSizeAlignment(
-          kConnectionManagerWindowSize, Alignment.topRight);
+          kConnectionManagerWindowSizeClosedChat, Alignment.topRight);
     } else {
       requestChatInputFocus();
       await windowManager.show();
-      await windowManager.setSizeAlignment(Size(600, 400), Alignment.topRight);
+      await windowManager.setSizeAlignment(
+          kConnectionManagerWindowSizeOpenChat, Alignment.topRight);
       _isShowCMChatPage = !_isShowCMChatPage;
       notifyListeners();
     }

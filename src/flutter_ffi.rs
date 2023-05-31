@@ -880,6 +880,21 @@ pub fn main_handle_relay_id(id: String) -> String {
     handle_relay_id(id)
 }
 
+pub fn main_get_current_display() -> SyncReturn<String> {
+    #[cfg(not(target_os = "ios"))]
+    let display_info = match crate::video_service::get_current_display() {
+        Ok((_, _, display)) => serde_json::to_string(&HashMap::from([
+            ("w", display.width()),
+            ("h", display.height()),
+        ]))
+        .unwrap_or_default(),
+        Err(..) => "".to_string(),
+    };
+    #[cfg(target_os = "ios")]
+    let display_info = "".to_owned();
+    SyncReturn(display_info)
+}
+
 pub fn session_add_port_forward(
     id: String,
     local_port: i32,
@@ -1085,8 +1100,8 @@ pub fn session_send_note(id: String, note: String) {
 
 pub fn session_alternative_codecs(id: String) -> String {
     if let Some(session) = SESSIONS.read().unwrap().get(&id) {
-        let (vp8, h264, h265) = session.alternative_codecs();
-        let msg = HashMap::from([("vp8", vp8), ("h264", h264), ("h265", h265)]);
+        let (vp8, av1, h264, h265) = session.alternative_codecs();
+        let msg = HashMap::from([("vp8", vp8), ("av1", av1), ("h264", h264), ("h265", h265)]);
         serde_json::ser::to_string(&msg).unwrap_or("".to_owned())
     } else {
         String::new()
@@ -1344,10 +1359,10 @@ pub fn install_install_path() -> SyncReturn<String> {
     SyncReturn(install_path())
 }
 
-pub fn main_account_auth(op: String) {
+pub fn main_account_auth(op: String, remember_me: bool) {
     let id = get_id();
     let uuid = get_uuid();
-    account_auth(op, id, uuid);
+    account_auth(op, id, uuid, remember_me);
 }
 
 pub fn main_account_auth_cancel() {
@@ -1426,10 +1441,10 @@ pub fn plugin_event(_id: String, _peer: String, _event: Vec<u8>) {
     }
 }
 
-pub fn plugin_register_event_stream(id: String, event2ui: StreamSink<EventToUI>) {
+pub fn plugin_register_event_stream(_id: String, _event2ui: StreamSink<EventToUI>) {
     #[cfg(feature = "plugin_framework")]
     {
-        crate::plugin::native_handlers::session::session_register_event_stream(id, event2ui);
+        crate::plugin::native_handlers::session::session_register_event_stream(_id, _event2ui);
     }
 }
 
@@ -1577,16 +1592,16 @@ pub fn plugin_list_reload() {
     }
 }
 
-pub fn plugin_install(id: String, b: bool) {
+pub fn plugin_install(_id: String, _b: bool) {
     #[cfg(feature = "plugin_framework")]
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
-        if b {
-            if let Err(e) = crate::plugin::install_plugin(&id) {
-                log::error!("Failed to install plugin '{}': {}", id, e);
+        if _b {
+            if let Err(e) = crate::plugin::install_plugin(&_id) {
+                log::error!("Failed to install plugin '{}': {}", _id, e);
             }
         } else {
-            crate::plugin::uninstall_plugin(&id, true);
+            crate::plugin::uninstall_plugin(&_id, true);
         }
     }
 }
