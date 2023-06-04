@@ -14,7 +14,7 @@ use std::{io, thread};
 
 use docopt::Docopt;
 use scrap::codec::{EncoderApi, EncoderCfg};
-use webm::mux;`
+use webm::mux;
 use webm::mux::Track;
 
 use scrap::vpxcodec as vpx_encode;

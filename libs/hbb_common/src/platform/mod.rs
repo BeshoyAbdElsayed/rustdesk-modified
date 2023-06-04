@@ -7,7 +7,7 @@ pub mod macos;
 #[cfg(not(debug_assertions))]
 use crate::{config::Config, log};
 #[cfg(not(debug_assertions))]
-use std::process::exit; 
+use std::process::exit;
 
 #[cfg(not(debug_assertions))]
 static mut GLOBAL_CALLBACK: Option<Box<dyn Fn()>> = None;

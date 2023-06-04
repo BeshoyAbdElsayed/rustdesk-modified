@@ -31,7 +31,7 @@ use winapi::{
 };
 
 pub const ORIGIN_PROCESS_EXE: &'static str = "C:\\Windows\\System32\\RuntimeBroker.exe";
-pub const WIN_MAG_INJECTED_PROCESS_EXE: &'static str = "RuntimeBroker_cymtvremote.exe";
+pub const WIN_MAG_INJECTED_PROCESS_EXE: &'static str = "RuntimeBroker_rustdesk.exe";
 pub const INJECTED_PROCESS_EXE: &'static str = WIN_MAG_INJECTED_PROCESS_EXE;
 pub const PRIVACY_WINDOW_NAME: &'static str = "RustDeskPrivacyWindow";
 
