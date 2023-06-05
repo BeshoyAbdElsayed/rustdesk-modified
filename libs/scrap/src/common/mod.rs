@@ -337,4 +337,4 @@ pub trait GoogleImage {
             (y, u, v)
         }
     }
-}   
+}

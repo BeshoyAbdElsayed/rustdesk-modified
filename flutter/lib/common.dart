@@ -1482,6 +1482,11 @@ Future<bool> initUniLinks() async {
   if (Platform.isLinux) {
     return false;
   }
+  // Register uni links for Windows. The required info of url scheme is already
+  // declared in `Info.plist` for macOS.
+  if (Platform.isWindows) {
+    registerProtocol('cymtvremote');
+  }
   // check cold boot
   try {
     final initialLink = await getInitialLink();

@@ -344,7 +344,6 @@ class DialogTextField extends StatelessWidget {
               helperText: helperText,
               helperMaxLines: 8,
               errorText: errorText,
-              errorMaxLines: 8,
             ),
             controller: controller,
             focusNode: focusNode,

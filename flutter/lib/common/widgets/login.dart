@@ -411,7 +411,6 @@ Future<bool?> loginDialog() async {
             password: password.text,
             id: await bind.mainGetMyId(),
             uuid: await bind.mainGetUuid(),
-            autoLogin: true,
             type: HttpType.kAuthReqTypeAccount));
 
         switch (resp.type) {
