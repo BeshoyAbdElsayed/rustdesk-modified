@@ -13,8 +13,8 @@ src/version.rs
 *tgz
 cert.pfx
 *.bak
-*png
-*svg
+# *png
+# *svg
 *jpg
 sciter.dll
 **pdb
