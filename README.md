@@ -250,14 +250,13 @@ flutter build ipa --release --obfuscate --split-debug-info=./split-debug-info
 
 ## Generate Windows Executable
 
-1. Download vcpkg from https://github.com/microsoft/vcpkg/archive/refs/heads/master.zip
+1. Download Visual Studo Community for C++ (https://visualstudio.microsoft.com/), Rust (https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe) and vcpkg from https://github.com/microsoft/vcpkg/archive/refs/heads/master.zip
 2. Extract `master.zip` and navigate to `vcpkg` then execute the following:
 
 ```
 ./bootstrap-vcpkg.bat
 cd ..
-export VCPKG_ROOT=$PWD/vcpkg
-vcpkg/vcpkg install libvpx:x64-windows-static libyuv:x64-windows-static opus:x64-windows-static aom:x64-windows-static
+vcpkg\vcpkg install libvpx:x64-windows-static libyuv:x64-windows-static opus:x64-windows-static aom:x64-windows-static
 ```
 3. Download and install LLVM: https://github.com/llvm/llvm-project/releases (or 64-bit binary: https://github.com/llvm/llvm-project/releases/download/llvmorg-15.0.2/LLVM-15.0.2-win64.exe)
 
@@ -268,15 +267,28 @@ Variable name: VCPKG_ROOT
 Variable value: [absolute path to vcpkg directory extracted in #2] (example: C:\vcpkg)
 
 Variable name: LIBCLANG_PATH
-Variable value: [LLVM installation path in #3]\bin (example C:\llvm\bin)
+Variable value: [LLVM installation path in #3]\bin (example C:\Program Files\LLVM\bin)
 ```
 
-5. Download `sciter.dll` (direct link: https://raw.githubusercontent.com/c-smile/sciter-sdk/master/bin.win/x64/sciter.dll) and move it inside the project's directory at `target/debug` then execute `cargo run` to compile:
+5. Download `sciter.dll` (direct link: https://raw.githubusercontent.com/c-smile/sciter-sdk/master/bin.win/x64/sciter.dll) and move it inside the project's directory at `target/debug` then execute `cargo run` to compile/run the debug version:
 
 ```
 #cd into the project's directory
-mkdir -p target/debug
-wget https://raw.githubusercontent.com/c-smile/sciter-sdk/master/bin.win/x64/sciter.dll
+mkdir -p target\debug
+#Download https://raw.githubusercontent.com/c-smile/sciter-sdk/master/bin.win/x64/sciter.dll
 mv sciter.dll target/debug
 cargo run
 ```
+
+6. In `Cargo.toml` file, replace the following:
+
+```
+default = ["use_dasp"] 
+```
+with:
+
+```
+default = ["use_dasp", "inline"] 
+```
+
+and then run `python res/inline-sciter.py` and `cargo build --release` to generate the executable file, which will be built at `target/release`.
