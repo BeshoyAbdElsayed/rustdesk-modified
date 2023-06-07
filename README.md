@@ -210,3 +210,73 @@ chmod 775 `binaries/linux/dpkg/cymtv-remote/usr/bin/cymtv-remote
 ```
 dpkg-deb --build `binaries/linux/dpkg/cymtv-remote`
 ```
+
+## Generate Xcarchive/IPA
+
+1. On Mac OS X, install `xcode` and add your developer account from "Settings > Accounts"
+2. Download the following dependencies:
+- https://github.com/rustdesk/doc.rustdesk.com/releases/download/console/ios_dep.tar.gz
+- https://github.com/microsoft/vcpkg/archive/refs/heads/master.zip
+3. Extract `ios_dep.tar.gz` and move its `vcpkg` into the home directory at `~`:
+
+```
+mv vcpkg ~
+```
+
+4. Extract `master.zip` and execute the following inside the `vcpkg` directory:
+```
+./bootstrap-vcpkg.sh
+./vcpkg install aom:arm64-ios
+```
+
+5. While in the `vcpkg` directory, copy the files inside `installed/vcpkg/arm64-ios` to `~/vcpkg/installed`:
+
+```
+cp -R installed/vcpkg/arm64-ios ~/vcpkg/installed
+```
+
+6. Navigate to the project's directory and execute the following to compile an IPA for iOS:
+
+```
+VCPKG_ROOT=$HOME/vcpkg ./flutter/ios_arm64.sh
+cd flutter
+dart pub global activate ffigen
+flutter build ipa --release --obfuscate --split-debug-info=./split-debug-info
+# or use to compile xcarchive: flutter build ipa --release --obfuscate --split-debug-info=./split-debug-info --no-codesign
+```
+
+7. The IPA/xcarchive files are generated at `flutter/build/ios`.
+
+
+## Generate Windows Executable
+
+1. Download vcpkg from https://github.com/microsoft/vcpkg/archive/refs/heads/master.zip
+2. Extract `master.zip` and navigate to `vcpkg` then execute the following:
+
+```
+./bootstrap-vcpkg.bat
+cd ..
+export VCPKG_ROOT=$PWD/vcpkg
+vcpkg/vcpkg install libvpx:x64-windows-static libyuv:x64-windows-static opus:x64-windows-static aom:x64-windows-static
+```
+3. Download and install LLVM: https://github.com/llvm/llvm-project/releases (or 64-bit binary: https://github.com/llvm/llvm-project/releases/download/llvmorg-15.0.2/LLVM-15.0.2-win64.exe)
+
+4. Navigate to Control Panel > System > Edit the system environment variables > Environment Variables... > System variables > New:
+
+```
+Variable name: VCPKG_ROOT
+Variable value: [absolute path to vcpkg directory extracted in #2] (example: C:\vcpkg)
+
+Variable name: LIBCLANG_PATH
+Variable value: [LLVM installation path in #3]\bin (example C:\llvm\bin)
+```
+
+5. Download `sciter.dll` (direct link: https://raw.githubusercontent.com/c-smile/sciter-sdk/master/bin.win/x64/sciter.dll) and move it inside the project's directory at `target/debug` then execute `cargo run` to compile:
+
+```
+#cd into the project's directory
+mkdir -p target/debug
+wget https://raw.githubusercontent.com/c-smile/sciter-sdk/master/bin.win/x64/sciter.dll
+mv sciter.dll target/debug
+cargo run
+```
