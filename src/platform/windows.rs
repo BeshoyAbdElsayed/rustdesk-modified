@@ -723,7 +723,7 @@ pub fn is_share_rdp() -> bool {
 pub fn set_share_rdp(enable: bool) {
     let (subkey, _, _, _, _) = get_install_info();
     let cmd = format!(
-        "reg add {} /f /v share_rdp /t REG_SZ /d \"{}\"",
+        "reg add \"{}\" /f /v share_rdp /t REG_SZ /d \"{}\"",
         subkey,
         if enable { "true" } else { "false" }
     );
@@ -964,14 +964,14 @@ fn get_after_install(exe: &str) -> String {
     let ext = app_name.to_lowercase();
     format!("
     chcp 65001
-    reg add HKEY_CLASSES_ROOT\\.{ext} /f
-    reg add HKEY_CLASSES_ROOT\\.{ext}\\DefaultIcon /f
-    reg add HKEY_CLASSES_ROOT\\.{ext}\\DefaultIcon /f /ve /t REG_SZ  /d \"\\\"{exe}\\\",0\"
-    reg add HKEY_CLASSES_ROOT\\.{ext}\\shell /f
-    reg add HKEY_CLASSES_ROOT\\.{ext}\\shell\\open /f
-    reg add HKEY_CLASSES_ROOT\\.{ext}\\shell\\open\\command /f
-    reg add HKEY_CLASSES_ROOT\\.{ext}\\shell\\open\\command /f /ve /t REG_SZ /d \"\\\"{exe}\\\" --play \\\"%%1\\\"\"
-    sc create {app_name} binpath= \"\\\"{exe}\\\" --service\" start= auto DisplayName= \"{app_name} Service\"
+    reg add \"HKEY_CLASSES_ROOT\\.{ext}\" /f
+    reg add \"HKEY_CLASSES_ROOT\\.{ext}\\DefaultIcon\" /f
+    reg add \"HKEY_CLASSES_ROOT\\.{ext}\\DefaultIcon\" /f /ve /t REG_SZ  /d \"\\\"{exe}\\\",0\"
+    reg add \"HKEY_CLASSES_ROOT\\.{ext}\\shell\" /f
+    reg add \"HKEY_CLASSES_ROOT\\.{ext}\\shell\\open\" /f
+    reg add \"HKEY_CLASSES_ROOT\\.{ext}\\shell\\open\\command\" /f
+    reg add \"HKEY_CLASSES_ROOT\\.{ext}\\shell\\open\\command\" /f /ve /t REG_SZ /d \"\\\"{exe}\\\" --play \\\"%%1\\\"\"
+    sc create \"{app_name}\" binpath= \"\\\"{exe}\\\" --service\" start= auto DisplayName= \"{app_name} Service\"
     netsh advfirewall firewall add rule name=\"{app_name} Service\" dir=in action=allow program=\"{exe}\" enable=yes
     sc start {app_name}
     reg add HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System /f /v SoftwareSASGeneration /t REG_DWORD /d 1
@@ -1125,19 +1125,19 @@ if exist \"{tmp_path}\\{app_name} Tray.lnk\" del /f /q \"{tmp_path}\\{app_name} 
 chcp 65001
 md \"{path}\"
 {copy_exe}
-reg add {subkey} /f
-reg add {subkey} /f /v DisplayIcon /t REG_SZ /d \"{exe}\"
-reg add {subkey} /f /v DisplayName /t REG_SZ /d \"{app_name}\"
-reg add {subkey} /f /v DisplayVersion /t REG_SZ /d \"{version}\"
-reg add {subkey} /f /v Version /t REG_SZ /d \"{version}\"
-reg add {subkey} /f /v InstallLocation /t REG_SZ /d \"{path}\"
-reg add {subkey} /f /v Publisher /t REG_SZ /d \"{app_name}\"
-reg add {subkey} /f /v VersionMajor /t REG_DWORD /d {major}
-reg add {subkey} /f /v VersionMinor /t REG_DWORD /d {minor}
-reg add {subkey} /f /v VersionBuild /t REG_DWORD /d {build}
-reg add {subkey} /f /v UninstallString /t REG_SZ /d \"\\\"{exe}\\\" --uninstall\"
-reg add {subkey} /f /v EstimatedSize /t REG_DWORD /d {size}
-reg add {subkey} /f /v WindowsInstaller /t REG_DWORD /d 0
+reg add \"{subkey}\" /f
+reg add \"{subkey}\" /f /v DisplayIcon /t REG_SZ /d \"{exe}\"
+reg add \"{subkey}\" /f /v DisplayName /t REG_SZ /d \"{app_name}\"
+reg add \"{subkey}\" /f /v DisplayVersion /t REG_SZ /d \"{version}\"
+reg add \"{subkey}\" /f /v Version /t REG_SZ /d \"{version}\"
+reg add \"{subkey}\" /f /v InstallLocation /t REG_SZ /d \"{path}\"
+reg add \"{subkey}\" /f /v Publisher /t REG_SZ /d \"{app_name}\"
+reg add \"{subkey}\" /f /v VersionMajor /t REG_DWORD /d {major}
+reg add \"{subkey}\" /f /v VersionMinor /t REG_DWORD /d {minor}
+reg add \"{subkey}\" /f /v VersionBuild /t REG_DWORD /d {build}
+reg add \"{subkey}\" /f /v UninstallString /t REG_SZ /d \"\\\"{exe}\\\" --uninstall\"
+reg add \"{subkey}\" /f /v EstimatedSize /t REG_DWORD /d {size}
+reg add \"{subkey}\" /f /v WindowsInstaller /t REG_DWORD /d 0
 {lic}
 cscript \"{mk_shortcut}\"
 cscript \"{uninstall_shortcut}\"
@@ -1146,10 +1146,10 @@ copy /Y \"{tmp_path}\\{app_name} Tray.lnk\" \"%PROGRAMDATA%\\Microsoft\\Windows\
 {shortcuts}
 copy /Y \"{tmp_path}\\Uninstall {app_name}.lnk\" \"{path}\\\"
 {dels}
-sc create {app_name} binpath= \"\\\"{exe}\\\" --import-config \\\"{config_path}\\\"\" start= auto DisplayName= \"{app_name} Service\"
-sc start {app_name}
-sc stop {app_name}
-sc delete {app_name}
+sc create \"{app_name}\" binpath= \"\\\"{exe}\\\" --import-config \\\"{config_path}\\\"\" start= auto DisplayName= \"{app_name} Service\"
+sc start \"{app_name}\"
+sc stop \"{app_name}\"
+sc delete \"{app_name}\"
 {install_cert}
 {after_install}
 {sleep}
@@ -1219,7 +1219,7 @@ fn get_before_uninstall(kill_self: bool) -> String {
     sc delete {app_name}
     taskkill /F /IM {broker_exe}
     taskkill /F /IM {app_name}.exe{filter}
-    reg delete HKEY_CLASSES_ROOT\\.{ext} /f
+    reg delete \"HKEY_CLASSES_ROOT\\.{ext}\" /f
     netsh advfirewall firewall delete rule name=\"{app_name} Service\"
     ",
         app_name = app_name,
@@ -1234,7 +1234,7 @@ fn get_uninstall(kill_self: bool) -> String {
     format!(
         "
     {before_uninstall}
-    reg delete {subkey} /f
+    reg delete \"{subkey}\" /f
     if exist \"{path}\" rd /s /q \"{path}\"
     if exist \"{start_menu}\" rd /s /q \"{start_menu}\"
     if exist \"%PUBLIC%\\Desktop\\{app_name}.lnk\" del /f /q \"%PUBLIC%\\Desktop\\{app_name}.lnk\"
@@ -1415,9 +1415,9 @@ fn register_licence() -> String {
     if let Ok(lic) = get_license_from_exe_name() {
         format!(
             "
-        reg add {subkey} /f /v Key /t REG_SZ /d \"{key}\"
-        reg add {subkey} /f /v Host /t REG_SZ /d \"{host}\"
-        reg add {subkey} /f /v Api /t REG_SZ /d \"{api}\"
+        reg add \"{subkey}\" /f /v Key /t REG_SZ /d \"{key}\"
+        reg add \"{subkey}\" /f /v Host /t REG_SZ /d \"{host}\"
+        reg add \"{subkey}\" /f /v Api /t REG_SZ /d \"{api}\"
     ",
             subkey = subkey,
             key = &lic.key,
