@@ -47,6 +47,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
   var _localIP = "";
   var _directAccessPort = "";
   var _fingerprint = "";
+  var _buildDate = "";
 
   @override
   void initState() {
@@ -141,6 +142,12 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
       if (_fingerprint != fingerprint) {
         update = true;
         _fingerprint = fingerprint;
+      }
+
+      final buildDate = await bind.mainGetBuildDate();
+      if (_buildDate != buildDate) {
+        update = true;
+        _buildDate = buildDate;
       }
 
       if (update) {
@@ -317,8 +324,8 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
                   await AndroidPermissionManager.request(
                       kRequestIgnoreBatteryOptimizations);
                 } else {
-                  final res = await gFFI.dialogManager
-                      .show<bool>((setState, close, context) => CustomAlertDialog(
+                  final res = await gFFI.dialogManager.show<bool>(
+                      (setState, close, context) => CustomAlertDialog(
                             title: Text(translate("Open System Setting")),
                             content: Text(translate(
                                 "android_open_battery_optimizations_tip")),
@@ -385,7 +392,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
                 if (gFFI.userModel.userName.value.isEmpty) {
                   loginDialog();
                 } else {
-                  gFFI.userModel.logOut();
+                  logOutConfirmDialog();
                 }
               },
             ),
@@ -471,6 +478,13 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
                 ),
                 leading: Icon(Icons.info)),
             SettingsTile.navigation(
+                title: Text(translate("Build Date")),
+                value: Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                  child: Text(_buildDate),
+                ),
+                leading: Icon(Icons.query_builder)),
+            SettingsTile.navigation(
                 onPressed: (context) => onCopyFingerprint(_fingerprint),
                 title: Text(translate("Fingerprint")),
                 value: Padding(
@@ -506,12 +520,12 @@ void showLanguageSettings(OverlayDialogManager dialogManager) async {
     final langs = json.decode(await bind.mainGetLangs()) as List<dynamic>;
     var lang = bind.mainGetLocalOption(key: "lang");
     dialogManager.show((setState, close, context) {
-      setLang(v) {
+      setLang(v) async {
         if (lang != v) {
           setState(() {
             lang = v;
           });
-          bind.mainSetLocalOption(key: "lang", value: v);
+          await bind.mainSetLocalOption(key: "lang", value: v);
           HomePage.homeKey.currentState?.refreshPages();
           Future.delayed(Duration(milliseconds: 200), close);
         }

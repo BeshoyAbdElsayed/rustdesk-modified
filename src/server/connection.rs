@@ -1,4 +1,4 @@
-use super::{input_service::*, *};
+    use super::{input_service::*, *};
 #[cfg(windows)]
 use crate::clipboard_file::*;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -63,6 +63,7 @@ lazy_static::lazy_static! {
     static ref SWITCH_SIDES_UUID: Arc::<Mutex<HashMap<String, (Instant, uuid::Uuid)>>> = Default::default();
 }
 pub static CLICK_TIME: AtomicI64 = AtomicI64::new(0);
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub static MOUSE_MOVE_TIME: AtomicI64 = AtomicI64::new(0);
 
 #[cfg(all(feature = "flutter", feature = "plugin_framework"))]
@@ -114,6 +115,8 @@ enum MessageInput {
     Mouse((MouseEvent, i32)),
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     Key((KeyEvent, bool)),
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    Pointer((PointerDeviceEvent, i32)),
     BlockOn,
     BlockOff,
     #[cfg(all(feature = "flutter", feature = "plugin_framework"))]
@@ -152,6 +155,7 @@ pub struct Connection {
     restart: bool,
     recording: bool,
     last_test_delay: i64,
+    network_delay: Option<u32>,
     lock_after_session_end: bool,
     show_remote_cursor: bool,
     // by peer
@@ -163,6 +167,7 @@ pub struct Connection {
     // by peer
     disable_audio: bool,
     // by peer
+    #[cfg(windows)]
     enable_file_transfer: bool,
     // by peer
     audio_sender: Option<MediaSender>,
@@ -186,10 +191,9 @@ pub struct Connection {
     pressed_modifiers: HashSet<rdev::Key>,
     #[cfg(all(target_os = "linux", feature = "linux_headless"))]
     #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
-    rx_cm_stream_ready: mpsc::Receiver<()>,
-    #[cfg(all(target_os = "linux", feature = "linux_headless"))]
-    #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
-    tx_desktop_ready: mpsc::Sender<()>,
+    linux_headless_handle: LinuxHeadlessHandle,
+    closed: bool,
+    delay_response_instant: Instant,
 }
 
 impl ConnInner {
@@ -241,12 +245,12 @@ impl Connection {
         id: i32,
         server: super::ServerPtrWeak,
     ) {
+        let _raii_id = raii::ConnectionID::new(id);
         let hash = Hash {
             salt: Config::get_salt(),
             challenge: Config::get_auto_password(6),
             ..Default::default()
         };
-        ALIVE_CONNS.lock().unwrap().push(id);
         let (tx_from_cm_holder, mut rx_from_cm) = mpsc::unbounded_channel::<ipc::Data>();
         // holding tx_from_cm_holder to avoid cpu burning of rx_from_cm.recv when all sender closed
         let tx_from_cm = tx_from_cm_holder.clone();
@@ -259,6 +263,10 @@ impl Connection {
         let (tx_cm_stream_ready, _rx_cm_stream_ready) = mpsc::channel(1);
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         let (_tx_desktop_ready, rx_desktop_ready) = mpsc::channel(1);
+        #[cfg(all(target_os = "linux", feature = "linux_headless"))]
+        #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
+        let linux_headless_handle =
+            LinuxHeadlessHandle::new(_rx_cm_stream_ready, _tx_desktop_ready);
 
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         let tx_cloned = tx.clone();
@@ -282,14 +290,17 @@ impl Connection {
             keyboard: Connection::permission("enable-keyboard"),
             clipboard: Connection::permission("enable-clipboard"),
             audio: Connection::permission("enable-audio"),
+            // to-do: make sure is the option correct here
             file: Connection::permission("enable-file-transfer"),
             restart: Connection::permission("enable-remote-restart"),
             recording: Connection::permission("enable-record-session"),
             last_test_delay: 0,
+            network_delay: None,
             lock_after_session_end: false,
             show_remote_cursor: false,
             ip: "".to_owned(),
             disable_audio: false,
+            #[cfg(windows)]
             enable_file_transfer: false,
             disable_clipboard: false,
             disable_keyboard: false,
@@ -312,12 +323,13 @@ impl Connection {
             pressed_modifiers: Default::default(),
             #[cfg(all(target_os = "linux", feature = "linux_headless"))]
             #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
-            rx_cm_stream_ready: _rx_cm_stream_ready,
-            #[cfg(all(target_os = "linux", feature = "linux_headless"))]
-            #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
-            tx_desktop_ready: _tx_desktop_ready,
+            linux_headless_handle,
+            closed: false,
+            delay_response_instant: Instant::now(),
         };
+        let addr = hbb_common::try_into_v4(addr);
         if !conn.on_open(addr).await {
+            conn.closed = true;
             // sleep to ensure msg got received.
             sleep(1.).await;
             return;
@@ -424,7 +436,6 @@ impl Connection {
                             } else if &name == "file" {
                                 conn.file = enabled;
                                 conn.send_permission(Permission::File, enabled).await;
-                                conn.send_to_cm(ipc::Data::ClipboardFileEnabled(conn.file_transfer_enabled()));
                             } else if &name == "restart" {
                                 conn.restart = enabled;
                                 conn.send_permission(Permission::Restart, enabled).await;
@@ -437,10 +448,8 @@ impl Connection {
                             allow_err!(conn.stream.send_raw(bytes).await);
                         }
                         #[cfg(windows)]
-                        ipc::Data::ClipboardFile(_clip) => {
-                            if conn.file_transfer_enabled() {
-                                allow_err!(conn.stream.send(&clip_2_msg(_clip)).await);
-                            }
+                        ipc::Data::ClipboardFile(clip) => {
+                            allow_err!(conn.stream.send(&clip_2_msg(clip)).await);
                         }
                         ipc::Data::PrivacyModeState((_, state)) => {
                             let msg_out = match state {
@@ -562,7 +571,7 @@ impl Connection {
                             match &m.union {
                                 Some(misc::Union::StopService(_)) => {
                                     conn.send_close_reason_no_retry("").await;
-                                    conn.on_close("stop service", true).await;
+                                    conn.on_close("stop service", false).await;
                                     break;
                                 }
                                 _ => {},
@@ -585,18 +594,19 @@ impl Connection {
                         break;
                     }
                     let time = get_time();
+                    let mut qos = video_service::VIDEO_QOS.lock().unwrap();
                     if time > 0 && conn.last_test_delay == 0 {
                         conn.last_test_delay = time;
                         let mut msg_out = Message::new();
-                        let qos = video_service::VIDEO_QOS.lock().unwrap();
                         msg_out.set_test_delay(TestDelay{
                             time,
-                            last_delay:qos.current_delay,
-                            target_bitrate:qos.target_bitrate,
+                            last_delay:conn.network_delay.unwrap_or_default(),
+                            target_bitrate: qos.bitrate(),
                             ..Default::default()
                         });
                         conn.inner.send(msg_out.into());
                     }
+                    qos.user_delay_response_elapsed(conn.inner.id(), conn.delay_response_instant.elapsed().as_millis());
                 }
             }
         }
@@ -616,7 +626,6 @@ impl Connection {
         );
         video_service::notify_video_frame_fetched(id, None);
         scrap::codec::Encoder::update(id, scrap::codec::EncodingUpdate::Remove);
-        video_service::VIDEO_QOS.lock().unwrap().reset();
         if conn.authorized {
             password::update_temporary_password();
         }
@@ -627,18 +636,13 @@ impl Connection {
         conn.post_conn_audit(json!({
             "action": "close",
         }));
-        let mut active_conns_lock = ALIVE_CONNS.lock().unwrap();
-        active_conns_lock.retain(|&c| c != id);
         if let Some(s) = conn.server.upgrade() {
             let mut s = s.write().unwrap();
             s.remove_connection(&conn.inner);
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             try_stop_record_cursor_pos();
         }
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        if active_conns_lock.is_empty() {
-            video_service::reset_resolutions();
-        }
+        conn.on_close("End", true).await;
         log::info!("#{} connection loop exited", id);
     }
 
@@ -660,14 +664,17 @@ impl Connection {
                     }
                     MessageInput::Key((mut msg, press)) => {
                         // todo: press and down have similar meanings.
-                        if press && msg.mode.unwrap() == KeyboardMode::Legacy {
+                        if press && msg.mode.enum_value() == Ok(KeyboardMode::Legacy) {
                             msg.down = true;
                         }
                         handle_key(&msg);
-                        if press && msg.mode.unwrap() == KeyboardMode::Legacy {
+                        if press && msg.mode.enum_value() == Ok(KeyboardMode::Legacy) {
                             msg.down = false;
                             handle_key(&msg);
                         }
+                    }
+                    MessageInput::Pointer((msg, id)) => {
+                        handle_pointer(&msg, id);
                     }
                     MessageInput::BlockOn => {
                         if crate::platform::block_input(true) {
@@ -826,7 +833,6 @@ impl Connection {
                 .await;
             Self::post_alarm_audit(
                 AlarmAuditType::IpWhitelist, //"ip whitelist",
-                true,
                 json!({ "ip":addr.ip() }),
             );
             return false;
@@ -836,9 +842,6 @@ impl Connection {
 
     async fn on_open(&mut self, addr: SocketAddr) -> bool {
         log::debug!("#{} Connection opened from {}.", self.inner.id, addr);
-        if !self.check_privacy_mode_on().await {
-            return false;
-        }
         if !self.check_whitelist(&addr).await {
             return false;
         }
@@ -876,6 +879,7 @@ impl Connection {
         v["id"] = json!(Config::get_id());
         v["uuid"] = json!(crate::encode64(hbb_common::get_uuid()));
         v["conn_id"] = json!(self.inner.id);
+        v["session_id"] = json!(self.lr.session_id);
         tokio::spawn(async move {
             allow_err!(Self::post_audit_async(url, v).await);
         });
@@ -916,7 +920,7 @@ impl Connection {
         });
     }
 
-    pub fn post_alarm_audit(typ: AlarmAuditType, from_remote: bool, info: Value) {
+    pub fn post_alarm_audit(typ: AlarmAuditType, info: Value) {
         let url = crate::get_audit_server(
             Config::get_option("api-server"),
             Config::get_option("custom-rendezvous-server"),
@@ -929,7 +933,6 @@ impl Connection {
         v["id"] = json!(Config::get_id());
         v["uuid"] = json!(crate::encode64(hbb_common::get_uuid()));
         v["typ"] = json!(typ as i8);
-        v["from_remote"] = json!(from_remote);
         v["info"] = serde_json::Value::String(info.to_string());
         tokio::spawn(async move {
             allow_err!(Self::post_audit_async(url, v).await);
@@ -958,7 +961,6 @@ impl Connection {
         let mut res = LoginResponse::new();
         let mut pi = PeerInfo {
             username: username.clone(),
-            conn_id: self.inner.id,
             version: VERSION.to_owned(),
             ..Default::default()
         };
@@ -981,8 +983,10 @@ impl Connection {
             }
             #[cfg(feature = "linux_headless")]
             #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
-            if linux_desktop_manager::is_headless() {
-                platform_additions.insert("headless".into(), json!(true));
+            if crate::platform::is_headless_allowed() {
+                if linux_desktop_manager::is_headless() {
+                    platform_additions.insert("headless".into(), json!(true));
+                }
             }
             if !platform_additions.is_empty() {
                 pi.platform_additions =
@@ -1005,10 +1009,15 @@ impl Connection {
             if dtype != crate::platform::linux::DISPLAY_SERVER_X11
                 && dtype != crate::platform::linux::DISPLAY_SERVER_WAYLAND
             {
-                res.set_error(format!(
-                    "Unsupported display server type \"{}\", x11 or wayland expected",
-                    dtype
-                ));
+                let msg = if crate::platform::linux::is_login_screen_wayland() {
+                    crate::client::LOGIN_SCREEN_WAYLAND.to_owned()
+                } else {
+                    format!(
+                        "Unsupported display server type \"{}\", x11 or wayland expected",
+                        dtype
+                    )
+                };
+                res.set_error(msg);
                 let mut msg_out = Message::new();
                 msg_out.set_login_response(res);
                 self.send(msg_out).await;
@@ -1125,6 +1134,7 @@ impl Connection {
         self.audio && !self.disable_audio
     }
 
+    #[cfg(windows)]
     fn file_transfer_enabled(&self) -> bool {
         self.file && self.enable_file_transfer
     }
@@ -1142,7 +1152,7 @@ impl Connection {
             clipboard: self.clipboard,
             audio: self.audio,
             file: self.file,
-            file_transfer_enabled: self.file_transfer_enabled(),
+            file_transfer_enabled: self.file,
             restart: self.restart,
             recording: self.recording,
             from_switch: self.from_switch,
@@ -1182,6 +1192,14 @@ impl Connection {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn input_mouse(&self, msg: MouseEvent, conn_id: i32) {
         self.tx_input.send(MessageInput::Mouse((msg, conn_id))).ok();
+    }
+
+    #[inline]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    fn input_pointer(&self, msg: PointerDeviceEvent, conn_id: i32) {
+        self.tx_input
+            .send(MessageInput::Pointer((msg, conn_id)))
+            .ok();
     }
 
     #[inline]
@@ -1237,6 +1255,7 @@ impl Connection {
             .lock()
             .unwrap()
             .retain(|_, s| s.last_recv_time.lock().unwrap().elapsed() < SESSION_TIMEOUT);
+        // last_recv_time is a mutex variable shared with connection, can be updated lively.
         if let Some(session) = session {
             if session.name == self.lr.my_name
                 && session.session_id == self.lr.session_id
@@ -1352,37 +1371,39 @@ impl Connection {
                         }
                     }
                 }
-                _ => {}
+                _ => {
+                    if !self.check_privacy_mode_on().await {
+                        return false;
+                    }
+                }
             }
 
+            #[cfg(any(
+                feature = "flatpak",
+                feature = "appimage",
+                not(all(target_os = "linux", feature = "linux_headless"))
+            ))]
+            let err_msg = "".to_owned();
             #[cfg(all(target_os = "linux", feature = "linux_headless"))]
             #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
-            let desktop_err = match lr.os_login.as_ref() {
-                Some(os_login) => {
-                    linux_desktop_manager::try_start_desktop(&os_login.username, &os_login.password)
-                }
-                None => linux_desktop_manager::try_start_desktop("", ""),
-            };
-            #[cfg(all(target_os = "linux", feature = "linux_headless"))]
-            #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
-            let is_headless = linux_desktop_manager::is_headless();
-            #[cfg(all(target_os = "linux", feature = "linux_headless"))]
-            #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
-            let wait_ipc_timeout = 10_000;
+            let err_msg = self
+                .linux_headless_handle
+                .try_start_desktop(lr.os_login.as_ref());
 
             // If err is LOGIN_MSG_DESKTOP_SESSION_NOT_READY, just keep this msg and go on checking password.
-            #[cfg(all(target_os = "linux", feature = "linux_headless"))]
-            #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
-            if !desktop_err.is_empty()
-                && desktop_err != crate::client::LOGIN_MSG_DESKTOP_SESSION_NOT_READY
+            if !err_msg.is_empty() && err_msg != crate::client::LOGIN_MSG_DESKTOP_SESSION_NOT_READY
             {
-                self.send_login_error(desktop_err).await;
+                self.send_login_error(err_msg).await;
                 return true;
             }
 
-            if !hbb_common::is_ipv4_str(&lr.username) && lr.username != Config::get_id() {
+            if !hbb_common::is_ip_str(&lr.username)
+                && !hbb_common::is_domain_port_str(&lr.username)
+                && lr.username != Config::get_id()
+            {
                 self.send_login_error(crate::client::LOGIN_MSG_OFFLINE)
                     .await;
+                return false;
             } else if password::approve_mode() == ApproveMode::Click
                 || password::approve_mode() == ApproveMode::Both && !password::has_valid_password()
             {
@@ -1400,34 +1421,20 @@ impl Connection {
                 self.send_login_error("Connection not allowed").await;
                 return false;
             } else if self.is_recent_session() {
-                #[cfg(all(target_os = "linux", feature = "linux_headless"))]
-                #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
-                if desktop_err.is_empty() {
-                    #[cfg(target_os = "linux")]
-                    if is_headless {
-                        self.tx_desktop_ready.send(()).await.ok();
-                        let _res = timeout(wait_ipc_timeout, self.rx_cm_stream_ready.recv()).await;
-                    }
-                    self.try_start_cm(lr.my_id, lr.my_name, true);
+                if err_msg.is_empty() {
+                    #[cfg(all(target_os = "linux", feature = "linux_headless"))]
+                    #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
+                    self.linux_headless_handle.wait_desktop_cm_ready().await;
+                    self.try_start_cm(lr.my_id.clone(), lr.my_name.clone(), true);
                     self.send_logon_response().await;
                     if self.port_forward_socket.is_some() {
                         return false;
                     }
                 } else {
-                    self.send_login_error(desktop_err).await;
-                }
-                #[cfg(not(all(target_os = "linux", feature = "linux_headless")))]
-                {
-                    self.try_start_cm(lr.my_id, lr.my_name, true);
-                    self.send_logon_response().await;
-                    if self.port_forward_socket.is_some() {
-                        return false;
-                    }
+                    self.send_login_error(err_msg).await;
                 }
             } else if lr.password.is_empty() {
-                #[cfg(all(target_os = "linux", feature = "linux_headless"))]
-                #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
-                if desktop_err.is_empty() {
+                if err_msg.is_empty() {
                     self.try_start_cm(lr.my_id, lr.my_name, false);
                 } else {
                     self.send_login_error(
@@ -1435,8 +1442,6 @@ impl Connection {
                     )
                     .await;
                 }
-                #[cfg(not(all(target_os = "linux", feature = "linux_headless")))]
-                self.try_start_cm(lr.my_id, lr.my_name, false);
             } else {
                 let mut failure = LOGIN_FAILURES
                     .lock()
@@ -1450,7 +1455,6 @@ impl Connection {
                         .await;
                     Self::post_alarm_audit(
                         AlarmAuditType::ManyWrongPassword,
-                        true,
                         json!({
                                     "ip":self.ip,
                         }),
@@ -1459,7 +1463,6 @@ impl Connection {
                     self.send_login_error("Please try 1 minute later").await;
                     Self::post_alarm_audit(
                         AlarmAuditType::FrequentAttempt,
-                        true,
                         json!({
                                     "ip":self.ip,
                         }),
@@ -1477,9 +1480,7 @@ impl Connection {
                         .lock()
                         .unwrap()
                         .insert(self.ip.clone(), failure);
-                    #[cfg(all(target_os = "linux", feature = "linux_headless"))]
-                    #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
-                    if desktop_err.is_empty() {
+                    if err_msg.is_empty() {
                         self.send_login_error(crate::client::LOGIN_MSG_PASSWORD_WRONG)
                             .await;
                         self.try_start_cm(lr.my_id, lr.my_name, false);
@@ -1489,40 +1490,21 @@ impl Connection {
                         )
                         .await;
                     }
-                    #[cfg(not(all(target_os = "linux", feature = "linux_headless")))]
-                    {
-                        self.send_login_error(crate::client::LOGIN_MSG_PASSWORD_WRONG)
-                            .await;
-                        self.try_start_cm(lr.my_id, lr.my_name, false);
-                    }
                 } else {
                     if failure.0 != 0 {
                         LOGIN_FAILURES.lock().unwrap().remove(&self.ip);
                     }
-                    #[cfg(all(target_os = "linux", feature = "linux_headless"))]
-                    #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
-                    if desktop_err.is_empty() {
-                        #[cfg(target_os = "linux")]
-                        if is_headless {
-                            self.tx_desktop_ready.send(()).await.ok();
-                            let _res =
-                                timeout(wait_ipc_timeout, self.rx_cm_stream_ready.recv()).await;
-                        }
+                    if err_msg.is_empty() {
+                        #[cfg(all(target_os = "linux", feature = "linux_headless"))]
+                        #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
+                        self.linux_headless_handle.wait_desktop_cm_ready().await;
                         self.send_logon_response().await;
                         self.try_start_cm(lr.my_id, lr.my_name, true);
                         if self.port_forward_socket.is_some() {
                             return false;
                         }
                     } else {
-                        self.send_login_error(desktop_err).await;
-                    }
-                    #[cfg(not(all(target_os = "linux", feature = "linux_headless")))]
-                    {
-                        self.send_logon_response().await;
-                        self.try_start_cm(lr.my_id, lr.my_name, true);
-                        if self.port_forward_socket.is_some() {
-                            return false;
-                        }
+                        self.send_login_error(err_msg).await;
                     }
                 }
             }
@@ -1537,7 +1519,9 @@ impl Connection {
                 video_service::VIDEO_QOS
                     .lock()
                     .unwrap()
-                    .update_network_delay(new_delay);
+                    .user_network_delay(self.inner.id(), new_delay);
+                self.network_delay = Some(new_delay);
+                self.delay_response_instant = Instant::now();
             }
         } else if let Some(message::Union::SwitchSidesResponse(_s)) = msg.union {
             #[cfg(feature = "flutter")]
@@ -1575,6 +1559,14 @@ impl Connection {
                         self.input_mouse(me, self.inner.id());
                     }
                 }
+                Some(message::Union::PointerDeviceEvent(pde)) =>
+                {
+                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                    if self.peer_keyboard_enabled() {
+                        MOUSE_MOVE_TIME.store(get_time(), Ordering::SeqCst);
+                        self.input_pointer(pde, self.inner.id());
+                    }
+                }
                 #[cfg(any(target_os = "android", target_os = "ios"))]
                 Some(message::Union::KeyEvent(..)) => {}
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1592,11 +1584,11 @@ impl Connection {
                             me.press
                         };
 
-                        let key = match me.mode.enum_value_or_default() {
-                            KeyboardMode::Map => {
+                        let key = match me.mode.enum_value() {
+                            Ok(KeyboardMode::Map) => {
                                 Some(crate::keyboard::keycode_to_rdev_key(me.chr()))
                             }
-                            KeyboardMode::Translate => {
+                            Ok(KeyboardMode::Translate) => {
                                 if let Some(key_event::Union::Chr(code)) = me.union {
                                     Some(crate::keyboard::keycode_to_rdev_key(code & 0x0000FFFF))
                                 } else {
@@ -1637,12 +1629,11 @@ impl Connection {
                         update_clipboard(_cb, None);
                     }
                 }
-                Some(message::Union::Cliprdr(_clip)) => {
-                    if self.file_transfer_enabled() {
-                        #[cfg(windows)]
-                        if let Some(clip) = msg_2_clip(_clip) {
-                            self.send_to_cm(ipc::Data::ClipboardFile(clip))
-                        }
+                Some(message::Union::Cliprdr(_clip)) =>
+                {
+                    #[cfg(windows)]
+                    if let Some(clip) = msg_2_clip(_clip) {
+                        self.send_to_cm(ipc::Data::ClipboardFile(clip))
                     }
                 }
                 Some(message::Union::FileAction(fa)) => {
@@ -1793,6 +1784,14 @@ impl Connection {
                 Some(message::Union::Misc(misc)) => match misc.union {
                     Some(misc::Union::SwitchDisplay(s)) => {
                         video_service::switch_display(s.display).await;
+                        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                        if s.width != 0 && s.height != 0 {
+                            self.change_resolution(&Resolution {
+                                width: s.width,
+                                height: s.height,
+                                ..Default::default()
+                            });
+                        }
                     }
                     Some(misc::Union::ChatMessage(c)) => {
                         self.send_to_cm(ipc::Data::ChatMessage { text: c.text });
@@ -1872,11 +1871,9 @@ impl Connection {
                             // Drop the audio sender previously.
                             drop(std::mem::replace(&mut self.audio_sender, None));
                             self.audio_sender = Some(start_audio_thread());
-                            allow_err!(self
-                                .audio_sender
+                            self.audio_sender
                                 .as_ref()
-                                .unwrap()
-                                .send(MediaData::AudioFormat(format)));
+                                .map(|a| allow_err!(a.send(MediaData::AudioFormat(format))));
                         }
                     }
                     #[cfg(feature = "flutter")]
@@ -1902,6 +1899,14 @@ impl Connection {
                             crate::plugin::handle_client_event(&p.id, &self.lr.my_id, &p.content);
                         self.send(msg).await;
                     }
+                    Some(misc::Union::FullSpeedFps(fps)) => video_service::VIDEO_QOS
+                        .lock()
+                        .unwrap()
+                        .user_full_speed_fps(self.inner.id(), fps),
+                    Some(misc::Union::AutoAdjustFps(fps)) => video_service::VIDEO_QOS
+                        .lock()
+                        .unwrap()
+                        .user_auto_adjust_fps(self.inner.id(), fps),
                     _ => {}
                 },
                 Some(message::Union::AudioFrame(frame)) => {
@@ -2016,14 +2021,14 @@ impl Connection {
                 video_service::VIDEO_QOS
                     .lock()
                     .unwrap()
-                    .update_image_quality(image_quality);
+                    .user_image_quality(self.inner.id(), image_quality);
             }
         }
         if o.custom_fps > 0 {
             video_service::VIDEO_QOS
                 .lock()
                 .unwrap()
-                .update_user_fps(o.custom_fps as _);
+                .user_custom_fps(self.inner.id(), o.custom_fps as _);
         }
         if let Some(q) = o.supported_decoding.clone().take() {
             scrap::codec::Encoder::update(self.inner.id(), scrap::codec::EncodingUpdate::New(q));
@@ -2159,12 +2164,6 @@ impl Connection {
                 }
             }
         }
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        if let Some(custom_resolution) = o.custom_resolution.as_ref() {
-            if custom_resolution.width > 0 && custom_resolution.height > 0 {
-                self.change_resolution(&custom_resolution);
-            }
-        }
         if self.keyboard {
             if let Ok(q) = o.block_input.enum_value() {
                 match q {
@@ -2181,6 +2180,10 @@ impl Connection {
     }
 
     async fn on_close(&mut self, reason: &str, lock: bool) {
+        if self.closed {
+            return;
+        }
+        self.closed = true;
         log::info!("#{} Connection closed: {}", self.inner.id(), reason);
         if lock && self.lock_after_session_end && self.keyboard {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -2303,6 +2306,8 @@ async fn start_ipc(
     mut _rx_desktop_ready: mpsc::Receiver<()>,
     tx_stream_ready: mpsc::Sender<()>,
 ) -> ResultType<()> {
+    use hbb_common::anyhow::anyhow;
+
     loop {
         if !crate::platform::is_prelogin() {
             break;
@@ -2318,19 +2323,14 @@ async fn start_ipc(
             args.push("--hide");
         };
 
+        #[allow(unused_mut)]
         #[cfg(target_os = "linux")]
-        #[cfg(not(feature = "linux_headless"))]
-        let user = None;
-        #[cfg(all(target_os = "linux", feature = "linux_headless"))]
-        #[cfg(any(feature = "flatpak", feature = "appimage"))]
-        let user = None;
-        #[cfg(all(target_os = "linux", feature = "linux_headless"))]
-        #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
         let mut user = None;
+
         // Cm run as user, wait until desktop session is ready.
         #[cfg(all(target_os = "linux", feature = "linux_headless"))]
         #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
-        if linux_desktop_manager::is_headless() {
+        if crate::platform::is_headless_allowed() && linux_desktop_manager::is_headless() {
             let mut username = linux_desktop_manager::get_username();
             loop {
                 if !username.is_empty() {
@@ -2396,7 +2396,7 @@ async fn start_ipc(
     }
 
     let _res = tx_stream_ready.send(()).await;
-    let mut stream = stream.unwrap();
+    let mut stream = stream.ok_or(anyhow!("none stream"))?;
     loop {
         tokio::select! {
             res = stream.next() => {
@@ -2526,5 +2526,86 @@ impl Drop for Connection {
     fn drop(&mut self) {
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         self.release_pressed_modifiers();
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "linux_headless"))]
+#[cfg(not(any(feature = "flatpak", feature = "appimage")))]
+struct LinuxHeadlessHandle {
+    pub is_headless_allowed: bool,
+    pub is_headless: bool,
+    pub wait_ipc_timeout: u64,
+    pub rx_cm_stream_ready: mpsc::Receiver<()>,
+    pub tx_desktop_ready: mpsc::Sender<()>,
+}
+
+#[cfg(all(target_os = "linux", feature = "linux_headless"))]
+#[cfg(not(any(feature = "flatpak", feature = "appimage")))]
+impl LinuxHeadlessHandle {
+    pub fn new(rx_cm_stream_ready: mpsc::Receiver<()>, tx_desktop_ready: mpsc::Sender<()>) -> Self {
+        let is_headless_allowed = crate::platform::is_headless_allowed();
+        let is_headless = is_headless_allowed && linux_desktop_manager::is_headless();
+        Self {
+            is_headless_allowed,
+            is_headless,
+            wait_ipc_timeout: 10_000,
+            rx_cm_stream_ready,
+            tx_desktop_ready,
+        }
+    }
+
+    pub fn try_start_desktop(&mut self, os_login: Option<&OSLogin>) -> String {
+        if self.is_headless_allowed {
+            match os_login {
+                Some(os_login) => {
+                    linux_desktop_manager::try_start_desktop(&os_login.username, &os_login.password)
+                }
+                None => linux_desktop_manager::try_start_desktop("", ""),
+            }
+        } else {
+            "".to_string()
+        }
+    }
+
+    pub async fn wait_desktop_cm_ready(&mut self) {
+        if self.is_headless {
+            self.tx_desktop_ready.send(()).await.ok();
+            let _res = timeout(self.wait_ipc_timeout, self.rx_cm_stream_ready.recv()).await;
+        }
+    }
+}
+
+mod raii {
+    use super::*;
+    pub struct ConnectionID(i32);
+
+    impl ConnectionID {
+        pub fn new(id: i32) -> Self {
+            ALIVE_CONNS.lock().unwrap().push(id);
+            Self(id)
+        }
+    }
+
+    impl Drop for ConnectionID {
+        fn drop(&mut self) {
+            let mut active_conns_lock = ALIVE_CONNS.lock().unwrap();
+            active_conns_lock.retain(|&c| c != self.0);
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            if active_conns_lock.is_empty() {
+                video_service::reset_resolutions();
+            }
+            #[cfg(all(windows, feature = "virtual_display_driver"))]
+            if active_conns_lock.is_empty() {
+                video_service::try_plug_out_virtual_display();
+            }
+            #[cfg(all(windows))]
+            if active_conns_lock.is_empty() {
+                crate::privacy_win_mag::stop();
+            }
+            video_service::VIDEO_QOS
+                .lock()
+                .unwrap()
+                .on_connection_close(self.0);
+        }
     }
 }

@@ -1,3 +1,4 @@
+use crate::input::{MOUSE_BUTTON_LEFT, MOUSE_TYPE_DOWN, MOUSE_TYPE_UP};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use std::{collections::HashMap, sync::atomic::AtomicBool};
 use std::{
@@ -7,7 +8,7 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex, RwLock,
     },
-    time::{Duration, SystemTime},
+    time::SystemTime,
 };
 
 use async_trait::async_trait;
@@ -15,19 +16,27 @@ use bytes::Bytes;
 use rdev::{Event, EventType::*, KeyCode};
 use uuid::Uuid;
 
-use hbb_common::config::{Config, LocalConfig, PeerConfig};
 #[cfg(not(feature = "flutter"))]
 use hbb_common::fs;
-use hbb_common::rendezvous_proto::ConnType;
-use hbb_common::tokio::{self, sync::mpsc};
-use hbb_common::{allow_err, message_proto::*};
-use hbb_common::{get_version_number, log, Stream};
+use hbb_common::{
+    allow_err,
+    config::{Config, LocalConfig, PeerConfig},
+    get_version_number, log,
+    message_proto::*,
+    rendezvous_proto::ConnType,
+    tokio::{
+        self,
+        sync::mpsc,
+        time::{Duration as TokioDuration, Instant},
+    },
+    SessionID, Stream,
+};
 
 use crate::client::io_loop::Remote;
 use crate::client::{
     check_if_retry, handle_hash, handle_login_error, handle_login_from_ui, handle_test_delay,
-    input_os_password, load_config, send_mouse, start_video_audio_threads, FileManager, Key,
-    LoginConfigHandler, QualityStatus, KEY_MAP,
+    input_os_password, load_config, send_mouse, send_pointer_device_event,
+    start_video_audio_threads, FileManager, Key, LoginConfigHandler, QualityStatus, KEY_MAP,
 };
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::common::GrabState;
@@ -37,9 +46,12 @@ use crate::{client::Data, client::Interface};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub static IS_IN: AtomicBool = AtomicBool::new(false);
 
+const CHANGE_RESOLUTION_VALID_TIMEOUT_SECS: u64 = 15;
+
 #[derive(Clone, Default)]
 pub struct Session<T: InvokeUiSession> {
-    pub id: String,
+    pub session_id: SessionID, // different from the one in LoginConfigHandler, used for flutter UI message pass
+    pub id: String,            // peer id
     pub password: String,
     pub args: Vec<String>,
     pub lc: Arc<RwLock<LoginConfigHandler>>,
@@ -49,6 +61,7 @@ pub struct Session<T: InvokeUiSession> {
     pub server_keyboard_enabled: Arc<RwLock<bool>>,
     pub server_file_transfer_enabled: Arc<RwLock<bool>>,
     pub server_clipboard_enabled: Arc<RwLock<bool>>,
+    pub last_change_display: Arc<Mutex<ChangeDisplayRecord>>,
 }
 
 #[derive(Clone)]
@@ -57,6 +70,43 @@ pub struct SessionPermissionConfig {
     pub server_keyboard_enabled: Arc<RwLock<bool>>,
     pub server_file_transfer_enabled: Arc<RwLock<bool>>,
     pub server_clipboard_enabled: Arc<RwLock<bool>>,
+}
+
+pub struct ChangeDisplayRecord {
+    time: Instant,
+    display: i32,
+    width: i32,
+    height: i32,
+}
+
+impl Default for ChangeDisplayRecord {
+    fn default() -> Self {
+        Self {
+            time: Instant::now()
+                - TokioDuration::from_secs(CHANGE_RESOLUTION_VALID_TIMEOUT_SECS + 1),
+            display: 0,
+            width: 0,
+            height: 0,
+        }
+    }
+}
+
+impl ChangeDisplayRecord {
+    fn new(display: i32, width: i32, height: i32) -> Self {
+        Self {
+            time: Instant::now(),
+            display,
+            width,
+            height,
+        }
+    }
+
+    pub fn is_the_same_record(&self, display: i32, width: i32, height: i32) -> bool {
+        self.time.elapsed().as_secs() < CHANGE_RESOLUTION_VALID_TIMEOUT_SECS
+            && self.display == display
+            && self.width == width
+            && self.height == height
+    }
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -95,12 +145,6 @@ impl<T: InvokeUiSession> Session<T> {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub fn is_rdp(&self) -> bool {
         self.lc.read().unwrap().conn_type.eq(&ConnType::RDP)
-    }
-
-    pub fn set_connection_info(&mut self, direct: bool, received: bool) {
-        let mut lc = self.lc.write().unwrap();
-        lc.direct = Some(direct);
-        lc.received = received;
     }
 
     pub fn get_view_style(&self) -> String {
@@ -149,6 +193,7 @@ impl<T: InvokeUiSession> Session<T> {
 
     pub fn toggle_option(&mut self, name: String) {
         let msg = self.lc.write().unwrap().toggle_option(name.clone());
+        #[cfg(not(feature = "flutter"))]
         if name == "enable-file-transfer" {
             self.send(Data::ToggleClipboardFile);
         }
@@ -262,9 +307,7 @@ impl<T: InvokeUiSession> Session<T> {
     }
 
     pub fn get_audit_server(&self, typ: String) -> String {
-        if self.lc.read().unwrap().conn_id <= 0
-            || LocalConfig::get_option("access_token").is_empty()
-        {
+        if LocalConfig::get_option("access_token").is_empty() {
             return "".to_owned();
         }
         crate::get_audit_server(
@@ -277,9 +320,9 @@ impl<T: InvokeUiSession> Session<T> {
     pub fn send_note(&self, note: String) {
         let url = self.get_audit_server("conn".to_string());
         let id = self.id.clone();
-        let conn_id = self.lc.read().unwrap().conn_id;
+        let session_id = self.lc.read().unwrap().session_id;
         std::thread::spawn(move || {
-            send_note(url, id, conn_id, note);
+            send_note(url, id, session_id, note);
         });
     }
 
@@ -369,7 +412,7 @@ impl<T: InvokeUiSession> Session<T> {
 
     pub fn get_path_sep(&self, is_remote: bool) -> &'static str {
         let p = self.get_platform(is_remote);
-        if &p == "Windows" {
+        if &p == crate::PLATFORM_WINDOWS {
             return "\\";
         } else {
             return "/";
@@ -485,9 +528,16 @@ impl<T: InvokeUiSession> Session<T> {
     }
 
     pub fn switch_display(&self, display: i32) {
+        let (w, h) = match self.lc.read().unwrap().get_custom_resolution(display) {
+            Some((w, h)) => (w, h),
+            None => (0, 0),
+        };
+
         let mut misc = Misc::new();
         misc.set_switch_display(SwitchDisplay {
             display,
+            width: w,
+            height: h,
             ..Default::default()
         });
         let mut msg_out = Message::new();
@@ -640,6 +690,18 @@ impl<T: InvokeUiSession> Session<T> {
         self.send_key_event(&key_event);
     }
 
+    pub fn send_touch_scale(&self, scale: i32, alt: bool, ctrl: bool, shift: bool, command: bool) {
+        let scale_evt = TouchScaleUpdate {
+            scale,
+            ..Default::default()
+        };
+        let mut touch_evt = TouchEvent::new();
+        touch_evt.set_scale_update(scale_evt);
+        let mut evt = PointerDeviceEvent::new();
+        evt.set_touch_event(touch_evt);
+        send_pointer_device_event(evt, alt, ctrl, shift, command, self);
+    }
+
     pub fn send_mouse(
         &self,
         mask: i32,
@@ -670,8 +732,20 @@ impl<T: InvokeUiSession> Session<T> {
         if cfg!(target_os = "macos") {
             let buttons = mask >> 3;
             let evt_type = mask & 0x7;
-            if buttons == 1 && evt_type == 1 && ctrl && self.peer_platform() != "Mac OS" {
-                self.send_mouse((1 << 3 | 2) as _, x, y, alt, ctrl, shift, command);
+            if buttons == MOUSE_BUTTON_LEFT
+                && evt_type == MOUSE_TYPE_DOWN
+                && ctrl
+                && self.peer_platform() != "Mac OS"
+            {
+                self.send_mouse(
+                    (MOUSE_BUTTON_LEFT << 3 | MOUSE_TYPE_UP) as _,
+                    x,
+                    y,
+                    alt,
+                    ctrl,
+                    shift,
+                    command,
+                );
             }
         }
     }
@@ -831,12 +905,41 @@ impl<T: InvokeUiSession> Session<T> {
         }
     }
 
-    #[inline]
-    pub fn set_custom_resolution(&mut self, wh: Option<(i32, i32)>) {
-        self.lc.write().unwrap().set_custom_resolution(wh);
+    pub fn handle_peer_switch_display(&self, display: &SwitchDisplay) {
+        self.ui_handler.switch_display(display);
+
+        if self.last_change_display.lock().unwrap().is_the_same_record(
+            display.display,
+            display.width,
+            display.height,
+        ) {
+            let custom_resolution = if display.width != display.original_resolution.width
+                || display.height != display.original_resolution.height
+            {
+                Some((display.width, display.height))
+            } else {
+                None
+            };
+            self.lc
+                .write()
+                .unwrap()
+                .set_custom_resolution(display.display, custom_resolution);
+        }
     }
 
-    pub fn change_resolution(&self, width: i32, height: i32) {
+    pub fn change_resolution(&self, display: i32, width: i32, height: i32) {
+        *self.last_change_display.lock().unwrap() =
+            ChangeDisplayRecord::new(display, width, height);
+        self.do_change_resolution(width, height);
+    }
+
+    fn try_change_init_resolution(&self, display: i32) {
+        if let Some((w, h)) = self.lc.read().unwrap().get_custom_resolution(display) {
+            self.do_change_resolution(w, h);
+        }
+    }
+
+    fn do_change_resolution(&self, width: i32, height: i32) {
         let mut misc = Misc::new();
         misc.set_change_resolution(Resolution {
             width,
@@ -854,38 +957,6 @@ impl<T: InvokeUiSession> Session<T> {
 
     pub fn close_voice_call(&self) {
         self.send(Data::CloseVoiceCall);
-    }
-
-    pub fn show_relay_hint(
-        &mut self,
-        last_recv_time: tokio::time::Instant,
-        msgtype: &str,
-        title: &str,
-        text: &str,
-    ) -> bool {
-        let duration = Duration::from_secs(3);
-        let counter_interval = 3;
-        let lock = self.lc.read().unwrap();
-        let success_time = lock.success_time;
-        let direct = lock.direct.unwrap_or(false);
-        let received = lock.received;
-        drop(lock);
-        if let Some(success_time) = success_time {
-            if direct && last_recv_time.duration_since(success_time) < duration {
-                let retry_for_relay = direct && !received;
-                let retry = check_if_retry(msgtype, title, text, retry_for_relay);
-                if retry && !retry_for_relay {
-                    self.lc.write().unwrap().direct_error_counter += 1;
-                    if self.lc.read().unwrap().direct_error_counter % counter_interval == 0 {
-                        #[cfg(feature = "flutter")]
-                        return true;
-                    }
-                }
-            } else {
-                self.lc.write().unwrap().direct_error_counter = 0;
-            }
-        }
-        false
     }
 }
 
@@ -974,9 +1045,9 @@ impl<T: InvokeUiSession> Interface for Session<T> {
     }
 
     fn msgbox(&self, msgtype: &str, title: &str, text: &str, link: &str) {
-        let direct = self.lc.read().unwrap().direct.unwrap_or_default();
+        let direct = self.lc.read().unwrap().direct;
         let received = self.lc.read().unwrap().received;
-        let retry_for_relay = direct && !received;
+        let retry_for_relay = direct == Some(true) && !received;
         let retry = check_if_retry(msgtype, title, text, retry_for_relay);
         self.ui_handler.msgbox(msgtype, title, text, link, retry);
     }
@@ -1006,6 +1077,7 @@ impl<T: InvokeUiSession> Interface for Session<T> {
                 self.msgbox("error", "Remote Error", "No Display", "");
                 return;
             }
+            self.try_change_init_resolution(pi.current_display);
             let p = self.lc.read().unwrap().should_auto_login();
             if !p.is_empty() {
                 input_os_password(p, true, self.clone());
@@ -1032,7 +1104,6 @@ impl<T: InvokeUiSession> Interface for Session<T> {
                 "Connected, waiting for image...",
                 "",
             );
-            self.lc.write().unwrap().success_time = Some(tokio::time::Instant::now());
         }
         self.on_connected(self.lc.read().unwrap().conn_type);
         #[cfg(windows)]
@@ -1114,6 +1185,12 @@ impl<T: InvokeUiSession> Session<T> {
 
 #[tokio::main(flavor = "current_thread")]
 pub async fn io_loop<T: InvokeUiSession>(handler: Session<T>) {
+    // It is ok to call this function multiple times.
+    #[cfg(target_os ="windows")]
+    if !handler.is_file_transfer() && !handler.is_port_forward() {
+        clipboard::ContextSend::enable(true);
+    }
+
     #[cfg(any(target_os = "android", target_os = "ios"))]
     let (sender, receiver) = mpsc::unbounded_channel::<Data>();
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1260,7 +1337,7 @@ async fn start_one_port_forward<T: InvokeUiSession>(
 }
 
 #[tokio::main(flavor = "current_thread")]
-async fn send_note(url: String, id: String, conn_id: i32, note: String) {
-    let body = serde_json::json!({ "id": id, "Id": conn_id, "note": note });
+async fn send_note(url: String, id: String, sid: u64, note: String) {
+    let body = serde_json::json!({ "id": id, "session_id": sid, "note": note });
     allow_err!(crate::post_request(url, body.to_string(), "").await);
 }

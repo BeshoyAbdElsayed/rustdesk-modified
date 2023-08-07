@@ -3,10 +3,15 @@ use super::*;
 use crate::common::is_server;
 #[cfg(target_os = "linux")]
 use crate::common::IS_X11;
+use crate::input::*;
 #[cfg(target_os = "macos")]
 use dispatch::Queue;
 use enigo::{Enigo, Key, KeyboardControllable, MouseButton, MouseControllable};
-use hbb_common::{get_time, protobuf::EnumOrUnknown};
+use hbb_common::{
+    get_time,
+    message_proto::{pointer_device_event::Union::TouchEvent, touch_event::Union::ScaleUpdate},
+    protobuf::EnumOrUnknown,
+};
 use rdev::{self, EventType, Key as RdevKey, KeyCode, RawKey};
 #[cfg(target_os = "macos")]
 use rdev::{CGEventSourceStateID, CGEventTapLocation, VirtualInput};
@@ -17,6 +22,8 @@ use std::{
     thread,
     time::{self, Duration, Instant},
 };
+#[cfg(windows)]
+use winapi::um::winuser::WHEEL_DELTA;
 
 const INVALID_CURSOR_POS: i32 = i32::MIN;
 
@@ -520,6 +527,21 @@ pub fn handle_mouse(evt: &MouseEvent, conn: i32) {
     handle_mouse_(evt, conn);
 }
 
+// to-do: merge handle_mouse and handle_pointer
+pub fn handle_pointer(evt: &PointerDeviceEvent, conn: i32) {
+    #[cfg(target_os = "macos")]
+    if !is_server() {
+        // having GUI, run main GUI thread, otherwise crash
+        let evt = evt.clone();
+        QUEUE.exec_async(move || handle_pointer_(&evt, conn));
+        return;
+    }
+    #[cfg(windows)]
+    crate::portable_service::client::handle_pointer(evt, conn);
+    #[cfg(not(windows))]
+    handle_pointer_(evt, conn);
+}
+
 pub fn fix_key_down_timeout_loop() {
     std::thread::spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_millis(10_000));
@@ -740,6 +762,27 @@ fn active_mouse_(conn: i32) -> bool {
     }
 }
 
+pub fn handle_pointer_(evt: &PointerDeviceEvent, conn: i32) {
+    if !active_mouse_(conn) {
+        return;
+    }
+
+    if EXITING.load(Ordering::SeqCst) {
+        return;
+    }
+
+    match &evt.union {
+        Some(TouchEvent(evt)) => match &evt.union {
+            Some(ScaleUpdate(_scale_evt)) => {
+                #[cfg(target_os = "windows")]
+                handle_scale(_scale_evt.scale);
+            }
+            _ => {}
+        },
+        _ => {}
+    }
+}
+
 pub fn handle_mouse_(evt: &MouseEvent, conn: i32) {
     if !active_mouse_(conn) {
         return;
@@ -756,7 +799,7 @@ pub fn handle_mouse_(evt: &MouseEvent, conn: i32) {
     let mut en = ENIGO.lock().unwrap();
     #[cfg(not(target_os = "macos"))]
     let mut to_release = Vec::new();
-    if evt_type == 1 {
+    if evt_type == MOUSE_TYPE_DOWN {
         fix_modifiers(&evt.modifiers[..], &mut en, 0);
         #[cfg(target_os = "macos")]
         en.reset_flag();
@@ -777,7 +820,7 @@ pub fn handle_mouse_(evt: &MouseEvent, conn: i32) {
         }
     }
     match evt_type {
-        0 => {
+        MOUSE_TYPE_MOVE => {
             en.mouse_move_to(evt.x, evt.y);
             *LATEST_PEER_INPUT_CURSOR.lock().unwrap() = Input {
                 conn,
@@ -786,43 +829,43 @@ pub fn handle_mouse_(evt: &MouseEvent, conn: i32) {
                 y: evt.y,
             };
         }
-        1 => match buttons {
-            0x01 => {
+        MOUSE_TYPE_DOWN => match buttons {
+            MOUSE_BUTTON_LEFT => {
                 allow_err!(en.mouse_down(MouseButton::Left));
             }
-            0x02 => {
+            MOUSE_BUTTON_RIGHT => {
                 allow_err!(en.mouse_down(MouseButton::Right));
             }
-            0x04 => {
+            MOUSE_BUTTON_WHEEL => {
                 allow_err!(en.mouse_down(MouseButton::Middle));
             }
-            0x08 => {
+            MOUSE_BUTTON_BACK => {
                 allow_err!(en.mouse_down(MouseButton::Back));
             }
-            0x10 => {
+            MOUSE_BUTTON_FORWARD => {
                 allow_err!(en.mouse_down(MouseButton::Forward));
             }
             _ => {}
         },
-        2 => match buttons {
-            0x01 => {
+        MOUSE_TYPE_UP => match buttons {
+            MOUSE_BUTTON_LEFT => {
                 en.mouse_up(MouseButton::Left);
             }
-            0x02 => {
+            MOUSE_BUTTON_RIGHT => {
                 en.mouse_up(MouseButton::Right);
             }
-            0x04 => {
+            MOUSE_BUTTON_WHEEL => {
                 en.mouse_up(MouseButton::Middle);
             }
-            0x08 => {
+            MOUSE_BUTTON_BACK => {
                 en.mouse_up(MouseButton::Back);
             }
-            0x10 => {
+            MOUSE_BUTTON_FORWARD => {
                 en.mouse_up(MouseButton::Forward);
             }
             _ => {}
         },
-        3 | 4 => {
+        MOUSE_TYPE_WHEEL | MOUSE_TYPE_TRACKPAD => {
             #[allow(unused_mut)]
             let mut x = evt.x;
             #[allow(unused_mut)]
@@ -832,12 +875,13 @@ pub fn handle_mouse_(evt: &MouseEvent, conn: i32) {
                 x = -x;
                 y = -y;
             }
+
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            let is_track_pad = evt_type == MOUSE_TYPE_TRACKPAD;
+
             #[cfg(target_os = "macos")]
             {
                 // TODO: support track pad on win.
-                let is_track_pad = evt
-                    .modifiers
-                    .contains(&EnumOrUnknown::new(ControlKey::Scroll));
 
                 // fix shift + scroll(down/up)
                 if !is_track_pad
@@ -857,13 +901,19 @@ pub fn handle_mouse_(evt: &MouseEvent, conn: i32) {
                 }
             }
 
+            #[cfg(windows)]
+            if !is_track_pad {
+                x *= WHEEL_DELTA as i32;
+                y *= WHEEL_DELTA as i32;
+            }
+
             #[cfg(not(target_os = "macos"))]
             {
-                if x != 0 {
-                    en.mouse_scroll_x(x);
-                }
                 if y != 0 {
                     en.mouse_scroll_y(y);
+                }
+                if x != 0 {
+                    en.mouse_scroll_x(x);
                 }
             }
         }
@@ -872,6 +922,18 @@ pub fn handle_mouse_(evt: &MouseEvent, conn: i32) {
     #[cfg(not(target_os = "macos"))]
     for key in to_release {
         en.key_up(key.clone());
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn handle_scale(scale: i32) {
+    let mut en = ENIGO.lock().unwrap();
+    if scale == 0 {
+        en.key_up(Key::Control);
+    } else {
+        if en.key_down(Key::Control).is_ok() {
+            en.mouse_scroll_y(scale);
+        }
     }
 }
 
@@ -1435,11 +1497,11 @@ pub fn handle_key_(evt: &KeyEvent) {
         _ => {}
     };
 
-    match evt.mode.unwrap() {
-        KeyboardMode::Map => {
+    match evt.mode.enum_value() {
+        Ok(KeyboardMode::Map) => {
             map_keyboard_mode(evt);
         }
-        KeyboardMode::Translate => {
+        Ok(KeyboardMode::Translate) => {
             translate_keyboard_mode(evt);
         }
         _ => {

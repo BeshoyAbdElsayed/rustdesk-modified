@@ -65,6 +65,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.0.0"
+  auto_size_text_field:
+    dependency: "direct main"
+    description:
+      name: auto_size_text_field
+      sha256: "8967129167193fefbb7a8707ade1bb71f9e52b9a5cf6da0132b7f6b7946c5a3f"
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.2.1"
   back_button_interceptor:
     dependency: "direct main"
     description:
@@ -319,7 +327,7 @@ packages:
     description:
       path: "."
       ref: HEAD
-      resolved-ref: "30518303e28702bf6b8110465293c05d21bc4cd2"
+      resolved-ref: "6c4181330f4ed80c1cb5670bd61aa75115f9f748"
       url: "https://github.com/rustdesk-org/rustdesk_desktop_multi_window"
     source: git
     version: "0.1.0"
@@ -1331,7 +1339,7 @@ packages:
     source: hosted
     version: "3.0.3"
   uuid:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: uuid
       sha256: "648e103079f7c64a36dc7d39369cabb358d377078a051d6ae2ad3aa539519313"

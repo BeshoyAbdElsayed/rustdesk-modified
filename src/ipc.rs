@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::atomic::Ordering};
+use std::{
+    collections::HashMap,
+    sync::atomic::{AtomicBool, Ordering},
+};
 #[cfg(not(windows))]
 use std::{fs::File, io::prelude::*};
 
@@ -38,6 +41,7 @@ pub enum PrivacyModeState {
 }
 // IPC actions here.
 pub const IPC_ACTION_CLOSE: &str = "close";
+pub static EXIT_RECV_CLOSE: AtomicBool = AtomicBool::new(true);
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "t", content = "c")]
@@ -148,6 +152,7 @@ pub enum DataPortableService {
     Pong,
     ConnCount(Option<usize>),
     Mouse((Vec<u8>, i32)),
+    Pointer((Vec<u8>, i32)),
     Key(Vec<u8>),
     RequestStart,
     WillClose,
@@ -182,6 +187,7 @@ pub enum Data {
     },
     SystemInfo(Option<String>),
     ClickTime(i64),
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     MouseMoveTime(i64),
     Authorize,
     Close,
@@ -223,6 +229,8 @@ pub enum Data {
     #[cfg(all(feature = "flutter", feature = "plugin_framework"))]
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     Plugin(Plugin),
+    #[cfg(windows)]
+    SyncWinCpuUsage(Option<f64>),
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -238,7 +246,7 @@ pub async fn start(postfix: &str) -> ResultType<()> {
                         loop {
                             match stream.next().await {
                                 Err(err) => {
-                                    log::trace!("ipc{} connection closed: {}", postfix, err);
+                                    log::trace!("ipc '{}' connection closed: {}", postfix, err);
                                     break;
                                 }
                                 Ok(Some(data)) => {
@@ -328,24 +336,21 @@ async fn handle(data: Data, stream: &mut Connection) {
             let t = crate::server::CLICK_TIME.load(Ordering::SeqCst);
             allow_err!(stream.send(&Data::ClickTime(t)).await);
         }
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         Data::MouseMoveTime(_) => {
             let t = crate::server::MOUSE_MOVE_TIME.load(Ordering::SeqCst);
             allow_err!(stream.send(&Data::MouseMoveTime(t)).await);
         }
         Data::Close => {
             log::info!("Receive close message");
-            #[cfg(not(target_os = "android"))]
-            crate::server::input_service::fix_key_down_timeout_at_exit();
-            std::process::exit(0);
+            if EXIT_RECV_CLOSE.load(Ordering::SeqCst) {
+                #[cfg(not(target_os = "android"))]
+                crate::server::input_service::fix_key_down_timeout_at_exit();
+                std::process::exit(0);
+            }
         }
         Data::OnlineStatus(_) => {
-            let x = config::ONLINE
-                .lock()
-                .unwrap()
-                .values()
-                .max()
-                .unwrap_or(&0)
-                .clone();
+            let x = config::get_online_state();
             let confirmed = Config::get_key_confirmed();
             allow_err!(stream.send(&Data::OnlineStatus(Some((x, confirmed)))).await);
         }
@@ -446,6 +451,16 @@ async fn handle(data: Data, stream: &mut Connection) {
                     .send(&Data::SyncConfig(Some(
                         (Config::get(), Config2::get()).into()
                     )))
+                    .await
+            );
+        }
+        #[cfg(windows)]
+        Data::SyncWinCpuUsage(None) => {
+            allow_err!(
+                stream
+                    .send(&Data::SyncWinCpuUsage(
+                        hbb_common::platform::windows::cpu_uage_one_minute()
+                    ))
                     .await
             );
         }

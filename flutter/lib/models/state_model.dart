@@ -6,6 +6,8 @@ import 'package:get/get.dart';
 
 import '../consts.dart';
 
+enum SvcStatus { notReady, connecting, ready }
+
 class StateGlobal {
   int _windowId = -1;
   bool _fullscreen = false;
@@ -14,8 +16,9 @@ class StateGlobal {
   final RxBool _showTabBar = true.obs;
   final RxDouble _resizeEdgeSize = RxDouble(kWindowEdgeSize);
   final RxDouble _windowBorderWidth = RxDouble(kWindowBorderWidth);
-  final RxBool showRemoteMenuBar = false.obs;
+  final RxBool showRemoteToolBar = false.obs;
   final RxInt displaysCount = 0.obs;
+  final svcStatus = SvcStatus.notReady.obs;
 
   // Use for desktop -> remote toolbar -> resolution
   final Map<String, Map<int, String?>> _lastResolutionGroupValues = {};
@@ -62,7 +65,7 @@ class StateGlobal {
               ? kMaximizeEdgeSize
               : kWindowEdgeSize;
       print(
-          "fullscreen: ${fullscreen}, resizeEdgeSize: ${_resizeEdgeSize.value}");
+          "fullscreen: $fullscreen, resizeEdgeSize: ${_resizeEdgeSize.value}");
       _windowBorderWidth.value = fullscreen ? 0 : kWindowBorderWidth;
       WindowController.fromWindowId(windowId)
           .setFullscreen(_fullscreen)

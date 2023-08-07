@@ -24,6 +24,8 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 pub use file_trait::FileManager;
+#[cfg(windows)]
+use hbb_common::tokio;
 #[cfg(not(feature = "flutter"))]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use hbb_common::tokio::sync::mpsc::UnboundedSender;
@@ -32,14 +34,16 @@ use hbb_common::{
     anyhow::{anyhow, Context},
     bail,
     config::{
-        Config, PeerConfig, PeerInfoSerde, Resolution, CONNECT_TIMEOUT, READ_TIMEOUT, RELAY_PORT,
+        Config, LocalConfig, PeerConfig, PeerInfoSerde, Resolution, CONNECT_TIMEOUT, READ_TIMEOUT,
+        RELAY_PORT,
     },
     get_version_number, log,
-    message_proto::{option_message::BoolOption, Resolution as ProtoResolution, *},
+    message_proto::{option_message::BoolOption, *},
     protobuf::Message as _,
     rand,
     rendezvous_proto::*,
     socket_client,
+    sodiumoxide::base64,
     sodiumoxide::crypto::{box_, secretbox, sign},
     tcp::FramedStream,
     timeout,
@@ -53,13 +57,13 @@ use scrap::{
     ImageFormat, ImageRgb,
 };
 
-use crate::common::{self, is_keyboard_mode_supported};
+use crate::is_keyboard_mode_supported;
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use crate::common::{check_clipboard, ClipboardContext, CLIPBOARD_INTERVAL};
 #[cfg(not(feature = "flutter"))]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::ui_session_interface::SessionPermissionConfig;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use crate::{check_clipboard, ClipboardContext, CLIPBOARD_INTERVAL};
 
 pub use super::lang::*;
 
@@ -88,6 +92,7 @@ pub const LOGIN_MSG_PASSWORD_EMPTY: &str = "Empty Password";
 pub const LOGIN_MSG_PASSWORD_WRONG: &str = "Wrong Password";
 pub const LOGIN_MSG_NO_PASSWORD_ACCESS: &str = "No Password Access";
 pub const LOGIN_MSG_OFFLINE: &str = "Offline";
+pub const LOGIN_SCREEN_WAYLAND: &str = "Wayland login screen is not supported";
 #[cfg(target_os = "linux")]
 pub const SCRAP_UBUNTU_HIGHER_REQUIRED: &str = "Wayland requires Ubuntu 21.04 or higher version.";
 #[cfg(target_os = "linux")]
@@ -213,6 +218,8 @@ impl Client {
         conn_type: ConnType,
         interface: impl Interface,
     ) -> ResultType<(Stream, bool, Option<Vec<u8>>)> {
+        interface.update_direct(None);
+        interface.update_received(false);
         match Self::_start(peer, key, token, conn_type, interface).await {
             Err(err) => {
                 let err_str = err.to_string();
@@ -305,7 +312,7 @@ impl Client {
             });
             socket.send(&msg_out).await?;
             if let Some(msg_in) =
-                crate::common::get_next_nonkeyexchange_msg(&mut socket, Some(i * 6000)).await
+                crate::get_next_nonkeyexchange_msg(&mut socket, Some(i * 6000)).await
             {
                 match msg_in.union {
                     Some(rendezvous_message::Union::PunchHoleResponse(ph)) => {
@@ -313,19 +320,20 @@ impl Client {
                             if !ph.other_failure.is_empty() {
                                 bail!(ph.other_failure);
                             }
-                            match ph.failure.enum_value_or_default() {
-                                punch_hole_response::Failure::ID_NOT_EXIST => {
+                            match ph.failure.enum_value() {
+                                Ok(punch_hole_response::Failure::ID_NOT_EXIST) => {
                                     bail!("ID does not exist");
                                 }
-                                punch_hole_response::Failure::OFFLINE => {
+                                Ok(punch_hole_response::Failure::OFFLINE) => {
                                     bail!("Remote desktop is offline");
                                 }
-                                punch_hole_response::Failure::LICENSE_MISMATCH => {
+                                Ok(punch_hole_response::Failure::LICENSE_MISMATCH) => {
                                     bail!("Key mismatch");
                                 }
-                                punch_hole_response::Failure::LICENSE_OVERUSE => {
+                                Ok(punch_hole_response::Failure::LICENSE_OVERUSE) => {
                                     bail!("Key overuse");
                                 }
+                                _ => bail!("other punch hole failure"),
                             }
                         } else {
                             peer_nat_type = ph.nat_type();
@@ -353,15 +361,8 @@ impl Client {
                             my_addr.is_ipv4(),
                         )
                         .await?;
-                        let pk = Self::secure_connection(
-                            peer,
-                            signed_id_pk,
-                            key,
-                            &mut conn,
-                            false,
-                            interface,
-                        )
-                        .await?;
+                        let pk =
+                            Self::secure_connection(peer, signed_id_pk, key, &mut conn).await?;
                         return Ok((conn, false, pk));
                     }
                     _ => {
@@ -459,6 +460,7 @@ impl Client {
         let mut conn =
             socket_client::connect_tcp_local(peer, Some(local_addr), connect_timeout).await;
         let mut direct = !conn.is_err();
+        interface.update_direct(Some(direct));
         if interface.is_force_relay() || conn.is_err() {
             if !relay_server.is_empty() {
                 conn = Self::request_relay(
@@ -471,11 +473,9 @@ impl Client {
                     conn_type,
                 )
                 .await;
-                if conn.is_err() {
-                    bail!(
-                        "Failed to connect via relay server: {}",
-                        conn.err().unwrap()
-                    );
+                interface.update_direct(Some(false));
+                if let Err(e) = conn {
+                    bail!("Failed to connect via relay server: {}", e);
                 }
                 direct = false;
             } else {
@@ -490,8 +490,7 @@ impl Client {
         }
         let mut conn = conn?;
         log::info!("{:?} used to establish connection", start.elapsed());
-        let pk = Self::secure_connection(peer_id, signed_id_pk, key, &mut conn, direct, interface)
-            .await?;
+        let pk = Self::secure_connection(peer_id, signed_id_pk, key, &mut conn).await?;
         Ok((conn, direct, pk))
     }
 
@@ -501,8 +500,6 @@ impl Client {
         signed_id_pk: Vec<u8>,
         key: &str,
         conn: &mut Stream,
-        direct: bool,
-        interface: impl Interface,
     ) -> ResultType<Option<Vec<u8>>> {
         let rs_pk = get_rs_pk(if key.is_empty() {
             hbb_common::config::RS_PUB_KEY
@@ -511,11 +508,13 @@ impl Client {
         });
         let mut sign_pk = None;
         let mut option_pk = None;
-        if !signed_id_pk.is_empty() && rs_pk.is_some() {
-            if let Ok((id, pk)) = decode_id_pk(&signed_id_pk, &rs_pk.unwrap()) {
-                if id == peer_id {
-                    sign_pk = Some(sign::PublicKey(pk));
-                    option_pk = Some(pk.to_vec());
+        if !signed_id_pk.is_empty() {
+            if let Some(rs_pk) = rs_pk {
+                if let Ok((id, pk)) = decode_id_pk(&signed_id_pk, &rs_pk) {
+                    if id == peer_id {
+                        sign_pk = Some(sign::PublicKey(pk));
+                        option_pk = Some(pk.to_vec());
+                    }
                 }
             }
             if sign_pk.is_none() {
@@ -532,13 +531,7 @@ impl Client {
         };
         match timeout(READ_TIMEOUT, conn.next()).await? {
             Some(res) => {
-                let bytes = match res {
-                    Ok(bytes) => bytes,
-                    Err(err) => {
-                        interface.set_force_relay(direct, false);
-                        bail!("{}", err);
-                    }
-                };
+                let bytes = res?;
                 if let Ok(msg_in) = Message::parse_from_bytes(&bytes) {
                     if let Some(message::Union::SignedId(si)) = msg_in.union {
                         if let Ok((id, their_pk_b)) = decode_id_pk(&si.id, &sign_pk) {
@@ -593,11 +586,17 @@ impl Client {
         let mut succeed = false;
         let mut uuid = "".to_owned();
         let mut ipv4 = true;
+
         for i in 1..=3 {
-            // use different socket due to current hbbs implement requiring different nat address for each attempt
+            // use different socket due to current hbbs implementation requiring different nat address for each attempt
             let mut socket = socket_client::connect_tcp(rendezvous_server, CONNECT_TIMEOUT)
                 .await
                 .with_context(|| "Failed to connect to rendezvous server")?;
+
+            if !key.is_empty() && !token.is_empty() {
+                // mainly for the security of token
+                allow_err!(secure_punch_connection(&mut socket, key).await);
+            }
 
             ipv4 = socket.local_addr().is_ipv4();
             let mut msg_out = RendezvousMessage::new();
@@ -619,15 +618,16 @@ impl Client {
                 ..Default::default()
             });
             socket.send(&msg_out).await?;
-            if let Some(Ok(bytes)) = socket.next_timeout(CONNECT_TIMEOUT).await {
-                if let Ok(msg_in) = RendezvousMessage::parse_from_bytes(&bytes) {
-                    if let Some(rendezvous_message::Union::RelayResponse(rs)) = msg_in.union {
-                        if !rs.refuse_reason.is_empty() {
-                            bail!(rs.refuse_reason);
-                        }
-                        succeed = true;
-                        break;
+
+            if let Some(msg_in) =
+                crate::get_next_nonkeyexchange_msg(&mut socket, Some(CONNECT_TIMEOUT)).await
+            {
+                if let Some(rendezvous_message::Union::RelayResponse(rs)) = msg_in.union {
+                    if !rs.refuse_reason.is_empty() {
+                        bail!(rs.refuse_reason);
                     }
+                    succeed = true;
+                    break;
                 }
             }
         }
@@ -672,9 +672,9 @@ impl Client {
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    fn try_stop_clipboard(_self_id: &str) {
+    fn try_stop_clipboard(_self_uuid: &uuid::Uuid) {
         #[cfg(feature = "flutter")]
-        if crate::flutter::other_sessions_running(_self_id) {
+        if crate::flutter::other_sessions_running(_self_uuid) {
             return;
         }
         TEXT_CLIPBOARD_STATE.lock().unwrap().running = false;
@@ -1066,17 +1066,14 @@ pub struct LoginConfigHandler {
     config: PeerConfig,
     pub port_forward: (String, i32),
     pub version: i64,
-    pub conn_id: i32,
     features: Option<Features>,
-    session_id: u64,
+    pub session_id: u64, // used for local <-> server communication
     pub supported_encoding: SupportedEncoding,
     pub restarting_remote_device: bool,
     pub force_relay: bool,
     pub direct: Option<bool>,
     pub received: bool,
     switch_uuid: Option<String>,
-    pub success_time: Option<hbb_common::tokio::time::Instant>,
-    pub direct_error_counter: usize,
 }
 
 impl Deref for LoginConfigHandler {
@@ -1116,15 +1113,18 @@ impl LoginConfigHandler {
         let config = self.load_config();
         self.remember = !config.password.is_empty();
         self.config = config;
-        self.session_id = rand::random();
+        let mut sid = rand::random();
+        if sid == 0 {
+            // you won the lottery
+            sid = 1;
+        }
+        self.session_id = sid;
         self.supported_encoding = Default::default();
         self.restarting_remote_device = false;
         self.force_relay = !self.get_option("force-always-relay").is_empty() || force_relay;
         self.direct = None;
         self.received = false;
         self.switch_uuid = switch_uuid;
-        self.success_time = None;
-        self.direct_error_counter = 0;
     }
 
     /// Check if the client should auto login.
@@ -1353,7 +1353,9 @@ impl LoginConfigHandler {
     ///
     /// * `ignore_default` - If `true`, ignore the default value of the option.
     fn get_option_message(&self, ignore_default: bool) -> Option<OptionMessage> {
-        if self.conn_type.eq(&ConnType::FILE_TRANSFER) || self.conn_type.eq(&ConnType::PORT_FORWARD) || self.conn_type.eq(&ConnType::RDP)
+        if self.conn_type.eq(&ConnType::FILE_TRANSFER)
+            || self.conn_type.eq(&ConnType::PORT_FORWARD)
+            || self.conn_type.eq(&ConnType::RDP)
         {
             return None;
         }
@@ -1402,16 +1404,6 @@ impl LoginConfigHandler {
             msg.disable_clipboard = BoolOption::Yes.into();
             n += 1;
         }
-        if let Some(r) = self.get_custom_resolution() {
-            if r.0 > 0 && r.1 > 0 {
-                msg.custom_resolution = Some(ProtoResolution {
-                    width: r.0,
-                    height: r.1,
-                    ..Default::default()
-                })
-                .into();
-            }
-        }
         msg.supported_decoding =
             hbb_common::protobuf::MessageField::some(Decoder::supported_decodings(Some(&self.id)));
         n += 1;
@@ -1424,7 +1416,9 @@ impl LoginConfigHandler {
     }
 
     pub fn get_option_message_after_login(&self) -> Option<OptionMessage> {
-        if self.conn_type.eq(&ConnType::FILE_TRANSFER) || self.conn_type.eq(&ConnType::PORT_FORWARD) || self.conn_type.eq(&ConnType::RDP)
+        if self.conn_type.eq(&ConnType::FILE_TRANSFER)
+            || self.conn_type.eq(&ConnType::PORT_FORWARD)
+            || self.conn_type.eq(&ConnType::RDP)
         {
             return None;
         }
@@ -1584,14 +1578,27 @@ impl LoginConfigHandler {
     }
 
     #[inline]
-    pub fn get_custom_resolution(&self) -> Option<(i32, i32)> {
-        self.config.custom_resolution.as_ref().map(|r| (r.w, r.h))
+    pub fn get_custom_resolution(&self, display: i32) -> Option<(i32, i32)> {
+        self.config
+            .custom_resolutions
+            .get(&display.to_string())
+            .map(|r| (r.w, r.h))
     }
 
     #[inline]
-    pub fn set_custom_resolution(&mut self, wh: Option<(i32, i32)>) {
+    pub fn set_custom_resolution(&mut self, display: i32, wh: Option<(i32, i32)>) {
+        let display = display.to_string();
         let mut config = self.load_config();
-        config.custom_resolution = wh.map(|r| Resolution { w: r.0, h: r.1 });
+        match wh {
+            Some((w, h)) => {
+                config
+                    .custom_resolutions
+                    .insert(display, Resolution { w, h });
+            }
+            None => {
+                config.custom_resolutions.remove(&display);
+            }
+        }
         self.save_config(config);
     }
 
@@ -1649,13 +1656,12 @@ impl LoginConfigHandler {
             }
         } else {
             let keyboard_modes =
-                common::get_supported_keyboard_modes(get_version_number(&pi.version));
+                crate::get_supported_keyboard_modes(get_version_number(&pi.version));
             let current_mode = &KeyboardMode::from_str(&config.keyboard_mode).unwrap_or_default();
             if !keyboard_modes.contains(current_mode) {
                 config.keyboard_mode = KeyboardMode::Legacy.to_string();
             }
         }
-        self.conn_id = pi.conn_id;
         // no matter if change, for update file time
         self.save_config(config);
         self.supported_encoding = pi.encoding.clone().unwrap_or_default();
@@ -1688,7 +1694,7 @@ impl LoginConfigHandler {
         password: Vec<u8>,
     ) -> Message {
         #[cfg(any(target_os = "android", target_os = "ios"))]
-        let my_id = Config::get_id_or(crate::common::DEVICE_ID.lock().unwrap().clone());
+        let my_id = Config::get_id_or(crate::DEVICE_ID.lock().unwrap().clone());
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         let my_id = Config::get_id();
         let mut lr = LoginRequest {
@@ -1745,18 +1751,6 @@ impl LoginConfigHandler {
         msg_out.set_misc(misc);
         msg_out
     }
-
-    pub fn set_force_relay(&mut self, direct: bool, received: bool) {
-        self.force_relay = false;
-        if direct && !received {
-            let errno = errno::errno().0;
-            // TODO: check mac and ios
-            if cfg!(windows) && errno == 10054 || !cfg!(windows) && errno == 104 {
-                self.force_relay = true;
-                self.set_option("force-always-relay".to_owned(), "Y".to_owned());
-            }
-        }
-    }
 }
 
 /// Media data.
@@ -1799,6 +1793,8 @@ where
     let mut skip_beginning = 0;
 
     std::thread::spawn(move || {
+        #[cfg(windows)]
+        sync_cpu_usage();
         let mut video_handler = VideoHandler::new();
         loop {
             if let Ok(data) = video_receiver.recv() {
@@ -1831,7 +1827,7 @@ where
                                 );
                             }
                             // Clear to get real-time fps
-                            if count > 300 {
+                            if count > 150 {
                                 count = 0;
                                 duration = Duration::ZERO;
                             }
@@ -1882,6 +1878,39 @@ pub fn start_audio_thread() -> MediaSender {
     audio_sender
 }
 
+#[cfg(windows)]
+fn sync_cpu_usage() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let t = std::thread::spawn(do_sync_cpu_usage);
+        t.join().ok();
+    });
+}
+
+#[cfg(windows)]
+#[tokio::main(flavor = "current_thread")]
+async fn do_sync_cpu_usage() {
+    use crate::ipc::{connect, Data};
+    let start = std::time::Instant::now();
+    match connect(50, "").await {
+        Ok(mut conn) => {
+            if conn.send(&&Data::SyncWinCpuUsage(None)).await.is_ok() {
+                if let Ok(Some(data)) = conn.next_timeout(50).await {
+                    match data {
+                        Data::SyncWinCpuUsage(cpu_usage) => {
+                            hbb_common::platform::windows::sync_cpu_usage(cpu_usage);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    log::info!("{:?} used to sync cpu usage", start.elapsed());
+}
+
 /// Handle latency test.
 ///
 /// # Arguments
@@ -1898,13 +1927,13 @@ pub async fn handle_test_delay(t: TestDelay, peer: &mut Stream) {
 
 /// Whether is track pad scrolling.
 #[inline]
-#[cfg(all(target_os = "macos"))]
+#[cfg(all(target_os = "macos", not(feature = "flutter")))]
 fn check_scroll_on_mac(mask: i32, x: i32, y: i32) -> bool {
     // flutter version we set mask type bit to 4 when track pad scrolling.
-    if mask & 7 == 4 {
+    if mask & 7 == crate::input::MOUSE_TYPE_TRACKPAD {
         return true;
     }
-    if mask & 3 != 3 {
+    if mask & 3 != crate::input::MOUSE_TYPE_WHEEL {
         return false;
     }
     let btn = mask >> 3;
@@ -1965,12 +1994,41 @@ pub fn send_mouse(
     if command {
         mouse_event.modifiers.push(ControlKey::Meta.into());
     }
-    #[cfg(all(target_os = "macos"))]
+    #[cfg(all(target_os = "macos", not(feature = "flutter")))]
     if check_scroll_on_mac(mask, x, y) {
-        mouse_event.modifiers.push(ControlKey::Scroll.into());
+        let factor = 3;
+        mouse_event.mask = crate::input::MOUSE_TYPE_TRACKPAD;
+        mouse_event.x *= factor;
+        mouse_event.y *= factor;
     }
     interface.swap_modifier_mouse(&mut mouse_event);
     msg_out.set_mouse_event(mouse_event);
+    interface.send(Data::Message(msg_out));
+}
+
+#[inline]
+pub fn send_pointer_device_event(
+    mut evt: PointerDeviceEvent,
+    alt: bool,
+    ctrl: bool,
+    shift: bool,
+    command: bool,
+    interface: &impl Interface,
+) {
+    let mut msg_out = Message::new();
+    if alt {
+        evt.modifiers.push(ControlKey::Alt.into());
+    }
+    if shift {
+        evt.modifiers.push(ControlKey::Shift.into());
+    }
+    if ctrl {
+        evt.modifiers.push(ControlKey::Control.into());
+    }
+    if command {
+        evt.modifiers.push(ControlKey::Meta.into());
+    }
+    msg_out.set_pointer_device_event(evt);
     interface.send(Data::Message(msg_out));
 }
 
@@ -2045,7 +2103,13 @@ struct LoginErrorMsgBox {
 lazy_static::lazy_static! {
     static ref LOGIN_ERROR_MAP: Arc<HashMap<&'static str, LoginErrorMsgBox>> = {
         use hbb_common::config::LINK_HEADLESS_LINUX_SUPPORT;
-        let map = HashMap::from([(LOGIN_MSG_DESKTOP_SESSION_NOT_READY, LoginErrorMsgBox{
+        let map = HashMap::from([(LOGIN_SCREEN_WAYLAND, LoginErrorMsgBox{
+            msgtype: "error",
+            title: "Login Error",
+            text: "Login screen using Wayland is not supported",
+            link: "https://rustdesk.com/docs/en/manual/linux/#login-screen",
+            try_again: true,
+        }), (LOGIN_MSG_DESKTOP_SESSION_NOT_READY, LoginErrorMsgBox{
             msgtype: "session-login",
             title: "",
             text: "",
@@ -2173,6 +2237,22 @@ pub async fn handle_hash(
     if password.is_empty() {
         password = lc.read().unwrap().config.password.clone();
     }
+    if password.is_empty() {
+        let access_token = LocalConfig::get_option("access_token");
+        let ab = hbb_common::config::Ab::load();
+        if !access_token.is_empty() && access_token == ab.access_token {
+            let id = lc.read().unwrap().id.clone();
+            if let Some(p) = ab
+                .peers
+                .iter()
+                .find_map(|p| if p.id == id { Some(p) } else { None })
+            {
+                if let Ok(hash) = base64::decode(p.hash.clone(), base64::Variant::Original) {
+                    password = hash;
+                }
+            }
+        }
+    }
     let password = if password.is_empty() {
         // login without password, the remote side can click accept
         interface.msgbox("input-password", "Password Required", "", "");
@@ -2298,16 +2378,48 @@ pub trait Interface: Send + Clone + 'static + Sized {
     async fn handle_test_delay(&mut self, t: TestDelay, peer: &mut Stream);
 
     fn get_login_config_handler(&self) -> Arc<RwLock<LoginConfigHandler>>;
-    fn set_force_relay(&self, direct: bool, received: bool) {
-        self.get_login_config_handler()
-            .write()
-            .unwrap()
-            .set_force_relay(direct, received);
-    }
+
     fn is_force_relay(&self) -> bool {
         self.get_login_config_handler().read().unwrap().force_relay
     }
     fn swap_modifier_mouse(&self, _msg: &mut hbb_common::protos::message::MouseEvent) {}
+
+    fn update_direct(&self, direct: Option<bool>) {
+        self.get_login_config_handler().write().unwrap().direct = direct;
+    }
+
+    fn update_received(&self, received: bool) {
+        self.get_login_config_handler().write().unwrap().received = received;
+    }
+
+    fn on_establish_connection_error(&self, err: String) {
+        log::error!("Connection closed: {}", err);
+        let title = "Connection Error";
+        let text = err.to_string();
+        let lc = self.get_login_config_handler();
+        let direct = lc.read().unwrap().direct;
+        let received = lc.read().unwrap().received;
+        let relay_condition = direct == Some(true) && !received;
+
+        // force relay
+        let errno = errno::errno().0;
+        if relay_condition
+            && (cfg!(windows) && (errno == 10054 || err.contains("10054"))
+                || !cfg!(windows) && (errno == 104 || err.contains("104")))
+        {
+            lc.write().unwrap().force_relay = true;
+            lc.write()
+                .unwrap()
+                .set_option("force-always-relay".to_owned(), "Y".to_owned());
+        }
+
+        // relay-hint
+        if cfg!(feature = "flutter") && relay_condition {
+            self.msgbox("relay-hint", title, &text, "");
+        } else {
+            self.msgbox("error", title, &text, "");
+        }
+    }
 }
 
 /// Data used by the client interface.
@@ -2326,6 +2438,7 @@ pub enum Data {
     CancelJob(i32),
     RemovePortForward(i32),
     AddPortForward((i32, String, i32)),
+    #[cfg(not(feature = "flutter"))]
     ToggleClipboardFile,
     NewRDP,
     SetConfirmOverrideFile((i32, i32, bool, bool, bool)),

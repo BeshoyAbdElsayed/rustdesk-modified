@@ -13,6 +13,8 @@
 // https://github.com/krruzic/pulsectl
 
 use super::*;
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+use hbb_common::anyhow::anyhow;
 use magnum_opus::{Application::*, Channels::*, Encoder};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -204,13 +206,10 @@ mod cpal_impl {
                 }
             }
         }
-        if device.is_none() {
-            device = Some(
-                HOST.default_input_device()
-                    .with_context(|| "Failed to get default input device for loopback")?,
-            );
-        }
-        let device = device.unwrap();
+        let device = device.unwrap_or(
+            HOST.default_input_device()
+                .with_context(|| "Failed to get default input device for loopback")?,
+        );
         log::info!("Input device: {}", device.name().unwrap_or("".to_owned()));
         let format = device
             .default_input_config()

@@ -31,7 +31,7 @@ class _PortForwardTabPageState extends State<PortForwardTabPage> {
     isRDP = params['isRDP'];
     tabController =
         Get.put(DesktopTabController(tabType: DesktopTabType.portForward));
-    tabController.onSelected = (_, id) {
+    tabController.onSelected = (id) {
       WindowController.fromWindowId(windowId())
           .setTitle(getWindowNameWithId(id));
     };
@@ -43,6 +43,8 @@ class _PortForwardTabPageState extends State<PortForwardTabPage> {
         page: PortForwardPage(
           key: ValueKey(params['id']),
           id: params['id'],
+          password: params['password'],
+          tabController: tabController,
           isRDP: isRDP,
           forceRelay: params['forceRelay'],
         )));
@@ -76,7 +78,9 @@ class _PortForwardTabPageState extends State<PortForwardTabPage> {
             page: PortForwardPage(
               key: ValueKey(args['id']),
               id: id,
+              password: args['password'],
               isRDP: isRDP,
+              tabController: tabController,
               forceRelay: args['forceRelay'],
             )));
       } else if (call.method == "onDestroy") {
@@ -110,12 +114,12 @@ class _PortForwardTabPageState extends State<PortForwardTabPage> {
     return Platform.isMacOS || kUseCompatibleUiMode
         ? tabWidget
         : Obx(
-          () => SubWindowDragToResizeArea(
+            () => SubWindowDragToResizeArea(
               child: tabWidget,
               resizeEdgeSize: stateGlobal.resizeEdgeSize.value,
               windowId: stateGlobal.windowId,
             ),
-        );
+          );
   }
 
   void onRemoveId(String id) {

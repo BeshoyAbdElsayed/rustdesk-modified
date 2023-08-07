@@ -40,10 +40,7 @@ use common::*;
 pub mod cli;
 #[cfg(not(any(target_os = "android", target_os = "ios", feature = "cli")))]
 pub mod core_main;
-#[cfg(all(windows, feature = "hbbs"))]
-mod hbbs;
 mod lang;
-#[cfg(windows)]
 mod license;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod port_forward;
@@ -52,6 +49,7 @@ mod port_forward;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod plugin;
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod tray;
 
 mod ui_cm_interface;

@@ -8,6 +8,8 @@ use std::{
 use bytes::Bytes;
 
 pub use connection::*;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use hbb_common::config::Config2;
 use hbb_common::tcp::{self, new_listener};
 use hbb_common::{
     allow_err,
@@ -22,8 +24,6 @@ use hbb_common::{
     sodiumoxide::crypto::{box_, sign},
     timeout, tokio, ResultType, Stream,
 };
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use hbb_common::{anyhow::anyhow, config::Config2};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use service::ServiceTmpl;
 use service::{GenericService, Service, Subscriber};
@@ -62,6 +62,9 @@ pub mod video_service;
 pub type Childs = Arc<Mutex<Vec<std::process::Child>>>;
 type ConnMap = HashMap<i32, ConnInner>;
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+const CONFIG_SYNC_INTERVAL_SECS: f32 = 0.3;
+
 lazy_static::lazy_static! {
     pub static ref CHILD_PROCESS: Childs = Default::default();
     pub static ref CONN_COUNT: Arc<Mutex<usize>> = Default::default();
@@ -69,6 +72,7 @@ lazy_static::lazy_static! {
     // for all initiative connections.
     //
     // [Note]
+    // ugly
     // Now we use this [`CLIENT_SERVER`] to do following operations:
     // - record local audio, and send to remote
     pub static ref CLIENT_SERVER: ServerPtr = new();
@@ -87,7 +91,7 @@ pub fn new() -> ServerPtr {
     let mut server = Server {
         connections: HashMap::new(),
         services: HashMap::new(),
-        id_count: 0,
+        id_count: hbb_common::rand::random::<i32>() % 1000 + 1000, // ensure positive
     };
     server.add_service(Box::new(audio_service::new()));
     server.add_service(Box::new(video_service::new()));
@@ -125,11 +129,7 @@ pub async fn create_tcp_connection(
     secure: bool,
 ) -> ResultType<()> {
     let mut stream = stream;
-    let id = {
-        let mut w = server.write().unwrap();
-        w.id_count += 1;
-        w.id_count
-    };
+    let id = server.write().unwrap().get_new_id();
     let (sk, pk) = Config::get_key_pair();
     if secure && pk.len() == sign::PUBLICKEYBYTES && sk.len() == sign::SECRETKEYBYTES {
         let mut sk_ = [0u8; sign::SECRETKEYBYTES];
@@ -302,9 +302,8 @@ impl Server {
 
     // get a new unique id
     pub fn get_new_id(&mut self) -> i32 {
-        let new_id = self.id_count;
         self.id_count += 1;
-        new_id
+        self.id_count
     }
 }
 
@@ -364,13 +363,9 @@ pub async fn start_server(is_server: bool) {
         log::info!("XAUTHORITY={:?}", std::env::var("XAUTHORITY"));
     }
     #[cfg(feature = "hwcodec")]
-    {
-        use std::sync::Once;
-        static ONCE: Once = Once::new();
-        ONCE.call_once(|| {
-            scrap::hwcodec::check_config_process();
-        })
-    }
+    scrap::hwcodec::check_config_process();
+    #[cfg(windows)]
+    hbb_common::platform::windows::start_cpu_performance_monitor();
 
     if is_server {
         crate::common::set_server_running(true);
@@ -380,16 +375,15 @@ pub async fn start_server(is_server: bool) {
                 std::process::exit(-1);
             }
         });
-        #[cfg(windows)]
-        crate::platform::windows::bootstrap();
         input_service::fix_key_down_timeout_loop();
-        crate::hbbs_http::sync::start();
         #[cfg(target_os = "linux")]
         if crate::platform::current_is_wayland() {
             allow_err!(input_service::setup_uinput(0, 1920, 0, 1080).await);
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         tokio::spawn(async { sync_and_watch_config_dir().await });
+        #[cfg(target_os = "windows")]
+        crate::platform::try_kill_broker();
         crate::RendezvousMediator::start_all().await;
     } else {
         match crate::ipc::connect(1000, "").await {
@@ -460,7 +454,7 @@ pub async fn start_ipc_url_server() {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 async fn sync_and_watch_config_dir() {
     if crate::platform::is_root() {
         return;
@@ -477,7 +471,7 @@ async fn sync_and_watch_config_dir() {
     log::debug!("#tries of ipc service connection: {}", tries);
     use hbb_common::sleep;
     for i in 1..=tries {
-        sleep(i as f32 * 0.3).await;
+        sleep(i as f32 * CONFIG_SYNC_INTERVAL_SECS).await;
         match crate::ipc::connect(1000, "_service").await {
             Ok(mut conn) => {
                 if !synced {
@@ -487,15 +481,17 @@ async fn sync_and_watch_config_dir() {
                                 Data::SyncConfig(Some(configs)) => {
                                     let (config, config2) = *configs;
                                     let _chk = crate::ipc::CheckIfRestart::new();
-                                    if cfg0.0 != config {
-                                        cfg0.0 = config.clone();
-                                        Config::set(config);
-                                        log::info!("sync config from root");
-                                    }
-                                    if cfg0.1 != config2 {
-                                        cfg0.1 = config2.clone();
-                                        Config2::set(config2);
-                                        log::info!("sync config2 from root");
+                                    if !config.is_empty() {
+                                        if cfg0.0 != config {
+                                            cfg0.0 = config.clone();
+                                            Config::set(config);
+                                            log::info!("sync config from root");
+                                        }
+                                        if cfg0.1 != config2 {
+                                            cfg0.1 = config2.clone();
+                                            Config2::set(config2);
+                                            log::info!("sync config2 from root");
+                                        }
                                     }
                                     synced = true;
                                 }
@@ -506,7 +502,7 @@ async fn sync_and_watch_config_dir() {
                 }
 
                 loop {
-                    sleep(0.3).await;
+                    sleep(CONFIG_SYNC_INTERVAL_SECS).await;
                     let cfg = (Config::get(), Config2::get());
                     if cfg != cfg0 {
                         log::info!("config updated, sync to root");
