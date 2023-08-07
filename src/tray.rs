@@ -74,7 +74,7 @@ pub fn make_tray() -> hbb_common::ResultType<()> {
             use std::process::Command;
             Command::new("cmd")
                 .arg("/c")
-                .arg("start rustdesk://")
+                // .arg("start rustdesk://")
                 .creation_flags(winapi::um::winbase::CREATE_NO_WINDOW)
                 .spawn()
                 .ok();
